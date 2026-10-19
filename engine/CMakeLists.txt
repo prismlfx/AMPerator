@@ -3,6 +3,9 @@ add_library(amp_engine STATIC
   Engine.h
   assets/AssetIndex.cpp
   assets/AssetIndex.h
+  dsp/BuiltinNodes.cpp
+  dsp/BuiltinNodes.h
+  dsp/Node.h
   model/ChainGraph.cpp
   model/ChainGraph.h
   model/RigDocument.cpp
