@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <cmath>
 
@@ -117,6 +118,7 @@ TEST_CASE("nam_amp: bad file returns error without throwing")
 TEST_CASE("nam_amp: processes DI at native rate")
 {
     auto node = ampWithFixture();
+    // di_48k.wav is generated at NAM's loudness reference level (peak -3 dBFS), so normalize should land near -18.
     const auto di = readWav(fixturesDir().getChildFile("di").getChildFile("di_48k.wav"));
     REQUIRE(di.getNumSamples() == 5 * 48000);
 
@@ -178,6 +180,19 @@ TEST_CASE("nam_amp: setModel after prepare re-prepares for current spec")
     }
     REQUIRE(allFinite(out));
     REQUIRE(std::abs(dominantFrequency(out, 4410, hostSr) - 440.0) <= 2.0);
+}
+
+TEST_CASE("nam_amp: resampler has no underruns across rates and block sizes")
+{
+    const double hostSr = GENERATE(44100.0, 88200.0, 96000.0);
+    const int block = GENERATE(1, 7, 64, 333);
+    CAPTURE(hostSr, block);
+
+    auto node = ampWithFixture();
+    const auto in = sine(440.0f, 0.1f, hostSr, 0.5);
+    const auto out = renderOffline(*node, in, hostSr, block);
+    REQUIRE(allFinite(out));
+    REQUIRE(node->underrunCount() == 0);
 }
 
 TEST_CASE("nam_amp: no model = passthrough")

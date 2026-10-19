@@ -116,6 +116,7 @@ struct NamAmpNode::Impl
     std::vector<double> modelIn, modelOut;
     std::vector<float> fifo;           // model output already at host rate, waiting to be read
     int fifoCount = 0;
+    std::atomic<int> underruns { 0 };
 
     nam::DSP* model() const { return loaded != nullptr ? loaded->data->model.get() : nullptr; }
 
@@ -127,6 +128,7 @@ struct NamAmpNode::Impl
     // Off the audio thread: size everything for the current spec and model.
     void configure()
     {
+        underruns.store(0, std::memory_order_relaxed);
         inGain.reset(spec.sampleRate, 0.02);
         outGain.reset(spec.sampleRate, 0.02);
         inGain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(inputGainDb.load()));
@@ -192,7 +194,11 @@ struct NamAmpNode::Impl
             fifoCount += down.process(downIn.data(), k, fifo.data() + fifoCount);
 
             const int avail = juce::jmin(n, fifoCount);
-            jassert(avail == n); // the prime should make underruns impossible
+            if (avail < n) // the prime should make this impossible; a gap would be an audible click
+            {
+                underruns.fetch_add(1, std::memory_order_relaxed);
+                jassertfalse;
+            }
             std::copy(fifo.data(), fifo.data() + avail, ch);
             std::fill(ch + avail, ch + n, 0.0f);
             std::copy(fifo.data() + avail, fifo.data() + fifoCount, fifo.data());
@@ -262,6 +268,8 @@ double NamAmpNode::modelSampleRate() const
 {
     return impl->loaded != nullptr ? impl->loaded->data->sampleRate : kDefaultModelRate;
 }
+
+int NamAmpNode::underrunCount() const { return impl->underruns.load(std::memory_order_relaxed); }
 
 void NamAmpNode::prepare(const ProcessSpec& s)
 {

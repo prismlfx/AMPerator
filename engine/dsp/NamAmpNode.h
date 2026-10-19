@@ -32,6 +32,9 @@ public:
     // the model and resamplers for the current spec).
     void setModel(std::unique_ptr<Loaded>);
     double modelSampleRate() const; // from model metadata, default 48000
+    // Test support: host blocks the resampler could not fill completely (padded with silence) since the last
+    // prepare()/setModel(). Should always stay 0; counted in all build types.
+    int underrunCount() const;
 
     void prepare(const ProcessSpec&) override;
     void process(juce::AudioBuffer<float>& io, int numSamples) override;
