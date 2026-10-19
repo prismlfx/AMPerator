@@ -154,7 +154,8 @@ TEST_CASE("unknown node type becomes placeholder and round trips unchanged")
 
 TEST_CASE("placeholder serialize overlays edited id and bypass")
 {
-    auto text = fixtureText().replace("\"type\": \"Gate\"", "\"type\": \"Reverb9000\"");
+    auto text = fixtureText().replace("\"type\": \"Gate\"", "\"type\": \"Reverb9000\", \"x\": 0");
+    text = text.replace("\"threshold\": -55", "\"threshold\": -55, \"mode\": \"hard\"");
     auto r = amp::parseRig(text);
     REQUIRE(r.rig.has_value());
     r.rig->nodes[1].id = "renamed";
@@ -167,6 +168,7 @@ TEST_CASE("placeholder serialize overlays edited id and bypass")
     REQUIRE(n.type == amp::NodeType::Placeholder);
     REQUIRE(static_cast<int>(n.params["threshold"]) == -55);
     REQUIRE(n.extra["type"].toString() == "Reverb9000");
+    REQUIRE(n.extra["params"]["mode"].toString() == "hard");
 }
 
 TEST_CASE("placeholder without original object is skipped")
@@ -178,7 +180,9 @@ TEST_CASE("placeholder without original object is skipped")
     rig.nodes.push_back(ph);
     auto out = amp::serializeRig(rig);
     REQUIRE_FALSE(out.contains("\"x\""));
-    REQUIRE(amp::parseRig(out).rig->nodes.size() == 5);
+    auto r = amp::parseRig(out);
+    REQUIRE(r.rig.has_value());
+    REQUIRE(r.rig->nodes.size() == 5);
 }
 
 TEST_CASE("rejects non-integral version")

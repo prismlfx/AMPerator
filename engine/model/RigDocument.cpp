@@ -133,7 +133,13 @@ juce::var nodeToVar(const NodeDoc& n)
         o->setProperty("id", n.id);
         o->setProperty("bypass", n.bypass);
         if (n.params.size() > 0)
-            o->setProperty("params", paramsToVar(n.params));
+        {
+            // Merge key by key so non-numeric original params survive.
+            auto merged = n.extra["params"].isObject() ? n.extra["params"].clone() : makeObject();
+            for (int i = 0; i < n.params.size(); ++i)
+                merged.getDynamicObject()->setProperty(n.params.getName(i), n.params.getValueAt(i));
+            o->setProperty("params", merged);
+        }
         return out;
     }
 
