@@ -1,6 +1,8 @@
 add_library(amp_engine STATIC
   Engine.cpp
   Engine.h
+  model/ChainGraph.cpp
+  model/ChainGraph.h
   model/RigDocument.cpp
   model/RigDocument.h)
 
