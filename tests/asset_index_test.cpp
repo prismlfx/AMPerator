@@ -127,3 +127,32 @@ TEST_CASE("asset_index: sha256Of is lowercase hex")
     REQUIRE(h.length() == 64);
     REQUIRE(h == h.toLowerCase());
 }
+
+TEST_CASE("asset_index: symlink loop in a root terminates")
+{
+    TempRoot t;
+    REQUIRE(fixture("tiny.nam").copyFileTo(t.dir.getChildFile("a.nam")));
+    REQUIRE(t.dir.getChildFile("sub").createDirectory());
+    REQUIRE(fixture("ir_48k.wav").copyFileTo(t.dir.getChildFile("sub/b.wav")));
+    if (! t.dir.createSymbolicLink(t.dir.getChildFile("sub/loop"), true))
+        SKIP("symlinks unavailable");
+
+    auto idx = indexOf(t.dir);
+    REQUIRE(idx.list("nam").size() == 1);
+    REQUIRE(idx.list("ir").size() == 1);
+}
+
+TEST_CASE("asset_index: setRoots clears results from removed roots")
+{
+    TempRoot a, b;
+    REQUIRE(fixture("tiny.nam").copyFileTo(a.dir.getChildFile("a.nam")));
+
+    amp::AssetIndex idx;
+    idx.setRoots({ a.dir });
+    idx.rescan();
+    REQUIRE(idx.resolve(refTo("nam", "a.nam", "")).how == amp::ResolveKind::ByFilename);
+
+    idx.setRoots({ b.dir });
+    REQUIRE(idx.resolve(refTo("nam", "a.nam", "")).how == amp::ResolveKind::Missing);
+    REQUIRE(idx.list("nam").empty());
+}

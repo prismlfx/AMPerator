@@ -20,6 +20,7 @@ struct Resolved { ResolveKind how = ResolveKind::Missing; juce::File file; };
 class AssetIndex
 {
 public:
+    /** Replaces the roots and clears the index; call rescan() to repopulate. */
     void setRoots(juce::Array<juce::File> roots);
     /** Recursive scan; skips hidden files and files in hidden directories. Hashes are cached by
         (path, size, modTime), so unchanged files are not re-read. */

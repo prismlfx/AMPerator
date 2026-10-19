@@ -32,7 +32,12 @@ juce::String fileNameOnly(const juce::String& path)
 }
 } // namespace
 
-void AssetIndex::setRoots(juce::Array<juce::File> r) { roots = std::move(r); }
+void AssetIndex::setRoots(juce::Array<juce::File> r)
+{
+    roots = std::move(r);
+    entries.clear(); // results of removed roots must not resolve; rescan() repopulates
+    cache.clear();
+}
 
 juce::String AssetIndex::sha256Of(const juce::File& f)
 {
@@ -48,7 +53,7 @@ void AssetIndex::rescan()
 
     for (const auto& root : roots)
     {
-        for (const auto& f : root.findChildFiles(juce::File::findFiles, true))
+        for (const auto& f : root.findChildFiles(juce::File::findFiles, true, "*", juce::File::FollowSymlinks::noCycles))
         {
             const auto kind = kindFor(f);
             if (kind.isEmpty() || f.isHidden() || f.getFileName().startsWithChar('.') || inHiddenDir(f, root))
