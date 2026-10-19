@@ -16,6 +16,11 @@ const NodeDoc* findNode(const RigDocument& doc, const juce::String& id)
     return nullptr;
 }
 
+bool isIoNode(const NodeDoc& n)
+{
+    return n.type == NodeType::Input || n.type == NodeType::Output;
+}
+
 void setChain(RigDocument& doc, const std::vector<juce::String>& order)
 {
     doc.connections.clear();
@@ -80,7 +85,7 @@ bool isLinearChain(const RigDocument& doc)
 juce::String insertNode(RigDocument& doc, NodeDoc node, int chainIndex)
 {
     auto order = linearOrder(doc);
-    if (order.empty())
+    if (order.empty() || isIoNode(node))
         return {};
 
     if (node.id.isEmpty() || findNode(doc, node.id) != nullptr)
@@ -97,7 +102,7 @@ bool moveNode(RigDocument& doc, const juce::String& id, int newChainIndex)
 {
     const auto* node = findNode(doc, id);
     auto order = linearOrder(doc);
-    if (node == nullptr || order.empty() || node->type == NodeType::Input || node->type == NodeType::Output)
+    if (node == nullptr || order.empty() || isIoNode(*node))
         return false;
 
     order.erase(std::find(order.begin(), order.end(), id));
@@ -110,7 +115,7 @@ bool removeNode(RigDocument& doc, const juce::String& id)
 {
     const auto* node = findNode(doc, id);
     auto order = linearOrder(doc);
-    if (node == nullptr || order.empty() || node->type == NodeType::Input || node->type == NodeType::Output)
+    if (node == nullptr || order.empty() || isIoNode(*node))
         return false;
 
     order.erase(std::find(order.begin(), order.end(), id));
@@ -125,7 +130,8 @@ std::optional<std::vector<juce::String>> topoOrder(const RigDocument& doc)
     std::map<juce::String, int> indegree;
     std::map<juce::String, std::vector<juce::String>> out;
     for (const auto& n : doc.nodes)
-        indegree[n.id] = 0;
+        if (! indegree.emplace(n.id, 0).second)
+            return std::nullopt;   // duplicate id
     for (const auto& [from, to] : doc.connections)
     {
         if (! indegree.count(from) || ! indegree.count(to))

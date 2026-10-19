@@ -87,6 +87,31 @@ TEST_CASE("move reorders and keeps chain linear")
     CHECK(middle(rig) == std::vector<juce::String>{ gate, amp, cab });
     CHECK(graph::isLinearChain(rig));
     CHECK(rig.nodes.size() == 5);
+    CHECK(graph::moveNode(rig, gate, 1));   // order is evaluated after removing the node
+    CHECK(middle(rig) == std::vector<juce::String>{ amp, gate, cab });
+}
+
+TEST_CASE("move and remove on a non-linear doc are refused and leave it unchanged")
+{
+    auto rig = makeDefaultRig("r", "b");
+    rig.connections.pop_back();
+    auto conns = rig.connections;
+    auto gate = rig.nodes[1].id;
+    CHECK_FALSE(graph::moveNode(rig, gate, 0));
+    CHECK_FALSE(graph::removeNode(rig, gate));
+    CHECK(rig.connections == conns);
+    CHECK(rig.nodes.size() == 5);
+}
+
+TEST_CASE("insert refuses Input/Output nodes")
+{
+    auto rig = makeDefaultRig("r", "b");
+    auto conns = rig.connections;
+    CHECK(graph::insertNode(rig, node("i2", NodeType::Input), 0).isEmpty());
+    CHECK(graph::insertNode(rig, node("o2", NodeType::Output), 0).isEmpty());
+    CHECK(rig.nodes.size() == 5);
+    CHECK(rig.connections == conns);
+    CHECK(graph::isLinearChain(rig));
 }
 
 TEST_CASE("remove rewires neighbors and prunes mappings")
@@ -99,6 +124,7 @@ TEST_CASE("remove rewires neighbors and prunes mappings")
     CHECK(graph::isLinearChain(rig));
     CHECK(rig.nodes.size() == 4);
     CHECK(rig.connections.size() == 3);
+    CHECK(graph::linearOrder(rig) == std::vector<juce::String>{ rig.nodes[0].id, gate, rig.nodes[2].id, rig.nodes[3].id });
     REQUIRE(rig.mappings.size() == 1);
     CHECK(rig.mappings[0].node == gate);
 }
