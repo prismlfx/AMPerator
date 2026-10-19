@@ -1,6 +1,8 @@
 add_library(amp_engine STATIC
   Engine.cpp
   Engine.h
+  assets/AssetIndex.cpp
+  assets/AssetIndex.h
   model/ChainGraph.cpp
   model/ChainGraph.h
   model/RigDocument.cpp
@@ -16,6 +18,7 @@ target_compile_definitions(amp_engine PUBLIC
   JUCE_PLUGINHOST_AU=1)
 target_link_libraries(amp_engine PUBLIC
   juce::juce_audio_utils
+  juce::juce_cryptography
   juce::juce_audio_processors
   juce::juce_dsp
   PRIVATE
