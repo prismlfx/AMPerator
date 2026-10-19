@@ -1,5 +1,7 @@
 #include "RigDocument.h"
 
+#include <cmath>
+
 namespace amp
 {
 namespace
@@ -37,11 +39,6 @@ bool isKnownNodeKey(const juce::Identifier& k)
 }
 
 juce::var makeObject() { return juce::var(new juce::DynamicObject()); }
-
-juce::var cloneObject(const juce::var& v)
-{
-    return v.isObject() ? v.clone() : makeObject();
-}
 
 AssetRef parseAsset(const juce::var& v)
 {
@@ -85,13 +82,13 @@ bool parseNode(const juce::var& v, NodeDoc& n, juce::String& error)
 
     if (v["state"].isString())
     {
-        juce::MemoryBlock mb;
-        if (! mb.fromBase64Encoding(v["state"].toString()))
+        juce::MemoryOutputStream mb;
+        if (! juce::Base64::convertFromBase64(mb, v["state"].toString()))
         {
             error = "node \"" + n.id + "\": invalid base64 in \"state\"";
             return false;
         }
-        n.state = std::move(mb);
+        n.state = mb.getMemoryBlock();
     }
 
     if (n.type == NodeType::Placeholder)
@@ -109,10 +106,36 @@ bool parseNode(const juce::var& v, NodeDoc& n, juce::String& error)
     return true;
 }
 
+juce::String toBase64(const juce::MemoryBlock& mb)
+{
+    juce::MemoryOutputStream out;
+    juce::Base64::convertToBase64(out, mb.getData(), mb.getSize());
+    return out.toString();
+}
+
+juce::var paramsToVar(const juce::NamedValueSet& params)
+{
+    auto v = makeObject();
+    for (int i = 0; i < params.size(); ++i)
+        v.getDynamicObject()->setProperty(params.getName(i), params.getValueAt(i));
+    return v;
+}
+
+// Returns void for a Placeholder with no original object (nothing sensible to write).
 juce::var nodeToVar(const NodeDoc& n)
 {
-    if (n.type == NodeType::Placeholder && n.extra.isObject())
-        return n.extra.clone();
+    if (n.type == NodeType::Placeholder)
+    {
+        if (! n.extra.isObject())
+            return {};
+        auto out = n.extra.clone();
+        auto* o = out.getDynamicObject();
+        o->setProperty("id", n.id);
+        o->setProperty("bypass", n.bypass);
+        if (n.params.size() > 0)
+            o->setProperty("params", paramsToVar(n.params));
+        return out;
+    }
 
     auto out = makeObject();
     auto* o = out.getDynamicObject();
@@ -127,12 +150,7 @@ juce::var nodeToVar(const NodeDoc& n)
     o->setProperty("bypass", n.bypass);
 
     if (n.params.size() > 0)
-    {
-        auto params = makeObject();
-        for (int i = 0; i < n.params.size(); ++i)
-            params.getDynamicObject()->setProperty(n.params.getName(i), n.params.getValueAt(i));
-        o->setProperty("params", params);
-    }
+        o->setProperty("params", paramsToVar(n.params));
 
     if (n.asset)
     {
@@ -161,7 +179,7 @@ juce::var nodeToVar(const NodeDoc& n)
     }
 
     if (n.state.getSize() > 0)
-        o->setProperty("state", n.state.toBase64Encoding());
+        o->setProperty("state", toBase64(n.state));
 
     if (n.artArchetype.isNotEmpty())
     {
@@ -189,9 +207,10 @@ ParseResult parseRigImpl(const juce::String& json)
         return fail("unsupported \"format\" (expected \"" + juce::String(kFormat) + "\")");
 
     const auto& ver = root["version"];
-    if (! (ver.isInt() || ver.isInt64() || ver.isDouble()) || static_cast<int>(ver) < 1)
+    const double verNum = static_cast<double>(ver);
+    if (! (ver.isInt() || ver.isInt64() || ver.isDouble()) || verNum != std::floor(verNum) || verNum < 1)
         return fail("missing or invalid \"version\"");
-    if (static_cast<int>(ver) > kVersion)
+    if (verNum > kVersion)
         return fail("rig \"version\" " + ver.toString() + " is newer than supported version " + juce::String(kVersion));
 
     RigDocument rig;
@@ -265,7 +284,8 @@ juce::String serializeRig(const RigDocument& rig)
 
     juce::Array<juce::var> nodes;
     for (const auto& n : rig.nodes)
-        nodes.add(nodeToVar(n));
+        if (auto v = nodeToVar(n); ! v.isVoid())
+            nodes.add(v);
     o->setProperty("nodes", nodes);
 
     juce::Array<juce::var> conns;

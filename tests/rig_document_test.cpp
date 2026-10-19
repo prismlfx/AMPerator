@@ -152,6 +152,48 @@ TEST_CASE("unknown node type becomes placeholder and round trips unchanged")
     REQUIRE(r2.rig->nodes[1].params.size() == 1);
 }
 
+TEST_CASE("placeholder serialize overlays edited id and bypass")
+{
+    auto text = fixtureText().replace("\"type\": \"Gate\"", "\"type\": \"Reverb9000\"");
+    auto r = amp::parseRig(text);
+    REQUIRE(r.rig.has_value());
+    r.rig->nodes[1].id = "renamed";
+    r.rig->nodes[1].bypass = true;
+    auto r2 = amp::parseRig(amp::serializeRig(*r.rig));
+    REQUIRE(r2.rig.has_value());
+    const auto& n = r2.rig->nodes[1];
+    REQUIRE(n.id == "renamed");
+    REQUIRE(n.bypass);
+    REQUIRE(n.type == amp::NodeType::Placeholder);
+    REQUIRE(static_cast<int>(n.params["threshold"]) == -55);
+    REQUIRE(n.extra["type"].toString() == "Reverb9000");
+}
+
+TEST_CASE("placeholder without original object is skipped")
+{
+    auto rig = amp::makeDefaultRig("T", "B");
+    amp::NodeDoc ph;
+    ph.id = "x";
+    ph.type = amp::NodeType::Placeholder;
+    rig.nodes.push_back(ph);
+    auto out = amp::serializeRig(rig);
+    REQUIRE_FALSE(out.contains("\"x\""));
+    REQUIRE(amp::parseRig(out).rig->nodes.size() == 5);
+}
+
+TEST_CASE("rejects non-integral version")
+{
+    auto r = amp::parseRig(fixtureText().replace("\"version\": 1", "\"version\": 1.5"));
+    REQUIRE_FALSE(r.rig.has_value());
+    REQUIRE(r.error.contains("version"));
+}
+
+TEST_CASE("state is standard base64")
+{
+    auto a = loadFixture();
+    REQUIRE(amp::serializeRig(a).contains("SGVsbG8gQU1QZXJhdG9y"));
+}
+
 TEST_CASE("default rig shape")
 {
     auto rig = amp::makeDefaultRig("Test", "My Tones");

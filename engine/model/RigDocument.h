@@ -48,6 +48,7 @@ struct ParseResult
 
 /** Never throws. On failure `rig` is empty and `error` describes why. */
 ParseResult parseRig(const juce::String& json);
+/** A Placeholder node with no original object in `extra` is skipped (not written). */
 juce::String serializeRig(const RigDocument&);
 
 /** in -> Gate -> NamAmp(empty) -> CabIR(empty) -> out, with a fresh uuid. */

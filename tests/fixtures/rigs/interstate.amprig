@@ -10,7 +10,7 @@
     { "id": "n1", "type": "Gate", "bypass": false, "params": { "threshold": -55 } },
     { "id": "n2", "type": "Plugin", "bypass": true,
       "plugin": { "format": "VST3", "uid": "ABCD-1234", "name": "TubeDrive", "vendor": "Example Audio" },
-      "state": "8..Df.CPPAFb." },
+      "state": "AAECAwQFBgc=" },
     { "id": "n3", "type": "NamAmp", "bypass": false,
       "asset": { "kind": "nam", "file": "Mesa Rect Ch2.nam",
                  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -23,7 +23,7 @@
       "params": { "mix": 1 } },
     { "id": "n5", "type": "Plugin", "bypass": true,
       "plugin": { "format": "VST3", "uid": "EFGH-5678", "name": "ValhallaDelay", "vendor": "Valhalla DSP" },
-      "state": "15.HUFar8FHA0DTkIWXz8lb" },
+      "state": "SGVsbG8gQU1QZXJhdG9y" },
     { "id": "out", "type": "Output", "params": { "gain": 0 } }
   ],
   "connections": [["in","n1"],["n1","n2"],["n2","n3"],["n3","n4"],["n4","n5"],["n5","out"]],
