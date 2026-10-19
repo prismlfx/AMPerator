@@ -26,6 +26,8 @@ add_library(amp_engine STATIC
   assets/AssetIndex.h
   dsp/BuiltinNodes.cpp
   dsp/BuiltinNodes.h
+  dsp/CabIRNode.cpp
+  dsp/CabIRNode.h
   dsp/NamAmpNode.cpp
   dsp/NamAmpNode.h
   dsp/Node.h
