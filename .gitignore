@@ -1,3 +1,6 @@
 .superpowers/
 .DS_Store
 build/
+
+ui/node_modules/
+ui/dist/
