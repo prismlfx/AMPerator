@@ -1,0 +1,31 @@
+{
+  "format": "amperator.rig",
+  "version": 1,
+  "id": "6f1c2a9e-3b7d-4c55-9a10-0d2f5e8b7c11",
+  "name": "Interstate Love Song",
+  "band": "STP",
+  "tags": ["90s", "clean-to-crunch"],
+  "nodes": [
+    { "id": "in", "type": "Input" },
+    { "id": "n1", "type": "Gate", "bypass": false, "params": { "threshold": -55 } },
+    { "id": "n2", "type": "Plugin", "bypass": true,
+      "plugin": { "format": "VST3", "uid": "ABCD-1234", "name": "TubeDrive", "vendor": "Example Audio" },
+      "state": "8..Df.CPPAFb." },
+    { "id": "n3", "type": "NamAmp", "bypass": false,
+      "asset": { "kind": "nam", "file": "Mesa Rect Ch2.nam",
+                 "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                 "source": { "provider": "tone3000", "id": "12345" } },
+      "params": { "inputGain": 0, "outputGain": -3, "normalize": true },
+      "art": { "archetype": "high-gain-rectifier" } },
+    { "id": "n4", "type": "CabIR", "bypass": false,
+      "asset": { "kind": "ir", "file": "4x12 SM57.wav",
+                 "sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" },
+      "params": { "mix": 1 } },
+    { "id": "n5", "type": "Plugin", "bypass": true,
+      "plugin": { "format": "VST3", "uid": "EFGH-5678", "name": "ValhallaDelay", "vendor": "Valhalla DSP" },
+      "state": "15.HUFar8FHA0DTkIWXz8lb" },
+    { "id": "out", "type": "Output", "params": { "gain": 0 } }
+  ],
+  "connections": [["in","n1"],["n1","n2"],["n2","n3"],["n3","n4"],["n4","n5"],["n5","out"]],
+  "mappings": [ { "control": "footswitch:L", "action": "toggleBypass", "node": "n2" } ]
+}
