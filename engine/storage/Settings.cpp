@@ -1,6 +1,7 @@
 #include "storage/Settings.h"
 
 #include <cmath>
+#include <optional>
 
 #include "storage/AtomicFile.h"
 
@@ -48,6 +49,32 @@ void trimRecent(juce::StringArray& recent)
         recent.remove(recent.size() - 1);
 }
 
+/** "0x04" or "4" -> 4; nullopt unless it is a HID keyboard usage (0x04..0xFF). */
+std::optional<int> parseKeycode(const juce::String& text)
+{
+    auto t = text.trim();
+    bool hex = t.startsWithIgnoreCase("0x");
+    auto digits = hex ? t.substring(2) : t;
+    if (digits.isEmpty() || digits.length() > 4
+        || !digits.containsOnly(hex ? "0123456789abcdefABCDEF" : "0123456789"))
+        return std::nullopt;
+    int code = hex ? digits.getHexValue32() : digits.getIntValue();
+    return (code >= 0x04 && code <= 0xff) ? std::optional<int>(code) : std::nullopt;
+}
+
+/** Not an object -> defaults. Inside the object, entries with a bad keycode or a non-string/empty control are skipped. */
+std::map<int, juce::String> readFootswitchKeys(const juce::var& obj, const std::map<int, juce::String>& def)
+{
+    auto* keys = obj.getProperty("footswitchKeys", juce::var()).getDynamicObject();
+    if (keys == nullptr)
+        return def;
+    std::map<int, juce::String> out;
+    for (auto& prop : keys->getProperties())
+        if (auto code = parseKeycode(prop.name.toString()); code && prop.value.isString() && prop.value.toString().isNotEmpty())
+            out[*code] = prop.value.toString();
+    return out;
+}
+
 juce::var toVarArray(const juce::StringArray& strings)
 {
     juce::Array<juce::var> arr;
@@ -78,6 +105,7 @@ Settings Settings::load(const juce::File& file)
     s.recentRigIds = readStrings(root, "recentRigIds");
     s.favoriteRigIds = readStrings(root, "favoriteRigIds");
     trimRecent(s.recentRigIds);
+    s.footswitchKeys = readFootswitchKeys(root, s.footswitchKeys);
 
     if (auto* arr = root.getProperty("globalMappings", juce::var()).getArray())
         for (auto& m : *arr)
@@ -116,6 +144,11 @@ bool Settings::save(const juce::File& file) const
         maps.add(juce::var(mo));
     }
     obj->setProperty("globalMappings", maps);
+
+    auto* keys = new juce::DynamicObject();
+    for (auto& [code, control] : footswitchKeys)
+        keys->setProperty("0x" + juce::String::toHexString(code).paddedLeft('0', 2), control);
+    obj->setProperty("footswitchKeys", juce::var(keys));
 
     if (!file.getParentDirectory().createDirectory())
         return false;

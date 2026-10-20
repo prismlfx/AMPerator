@@ -24,6 +24,11 @@ add_library(amp_engine STATIC
   Engine.h
   audio/AudioIO.cpp
   audio/AudioIO.h
+  control/ControlEvent.h
+  control/HidFootswitch.cpp
+  control/HidFootswitch.h
+  control/MidiControl.cpp
+  control/MidiControl.h
   assets/AssetIndex.cpp
   assets/AssetIndex.h
   dsp/BuiltinNodes.cpp
@@ -68,8 +73,13 @@ target_link_libraries(amp_engine PUBLIC
   juce::juce_audio_processors
   juce::juce_dsp
   PRIVATE
+  hidapi::hidapi
   # NAM registers its architectures (LSTM, WaveNet, ...) from static initialisers in otherwise
   # unreferenced objects; whole-archive keeps the linker from dropping them.
   $<LINK_LIBRARY:WHOLE_ARCHIVE,nam_core>
   juce::juce_recommended_config_flags
   juce::juce_recommended_warning_flags)
+if(APPLE)
+  # IOHIDCheckAccess / IOHIDRequestAccess (Input Monitoring prompt) for the footswitch.
+  target_link_libraries(amp_engine PRIVATE "-framework IOKit" "-framework CoreFoundation")
+endif()

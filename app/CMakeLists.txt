@@ -2,7 +2,11 @@ juce_add_gui_app(AMPerator
   PRODUCT_NAME "AMPerator"
   COMPANY_NAME "AMPerator"
   BUNDLE_ID org.amperator.app
-  MICROPHONE_PERMISSION_ENABLED TRUE)
+  MICROPHONE_PERMISSION_ENABLED TRUE
+  PLIST_TO_MERGE [[<plist><dict>
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>AMPerator reads your USB footswitch so pedal presses control the rig even when another app is in front.</string>
+  </dict></plist>]])
 
 target_sources(AMPerator PRIVATE Main.cpp)
 target_compile_definitions(AMPerator PRIVATE

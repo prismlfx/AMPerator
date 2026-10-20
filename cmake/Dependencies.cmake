@@ -23,9 +23,19 @@ FetchContent_Declare(NeuralAmpModelerCore
   GIT_SUBMODULES Dependencies/eigen
   SOURCE_SUBDIR amp-no-cmake)
 
-# Wired in by Task 13: hidapi (BSD)
-# FetchContent_Declare(hidapi
-#   GIT_REPOSITORY https://github.com/libusb/hidapi.git
-#   GIT_TAG hidapi-0.15.0)
+# hidapi (BSD-3-Clause / GPLv3 / original HIDAPI license; used under BSD) - footswitch input.
+# Static, no test tools. macOS backend uses IOKit + CoreFoundation (linked by engine/CMakeLists.txt too).
+FetchContent_Declare(hidapi
+  GIT_REPOSITORY https://github.com/libusb/hidapi.git
+  GIT_TAG hidapi-0.15.0
+  GIT_SHALLOW TRUE)
+set(BUILD_SHARED_LIBS OFF)
+set(HIDAPI_WITH_TESTS OFF CACHE BOOL "" FORCE)
+set(HIDAPI_BUILD_HIDTEST OFF CACHE BOOL "" FORCE)
+set(HIDAPI_BUILD_PP_DATA_DUMP OFF CACHE BOOL "" FORCE)
 
-FetchContent_MakeAvailable(JUCE Catch2 NeuralAmpModelerCore)
+FetchContent_MakeAvailable(JUCE Catch2 NeuralAmpModelerCore hidapi)
+if(TARGET hidapi_darwin AND NOT MSVC)
+  target_compile_options(hidapi_darwin PRIVATE -w) # third-party: keep our build output clean
+  set_target_properties(hidapi_darwin PROPERTIES XCODE_ATTRIBUTE_GCC_WARN_INHIBIT_ALL_WARNINGS YES)
+endif()
