@@ -1,5 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <map>
+#include <optional>
+#include <vector>
+
 #include "control/MappingEngine.h"
 
 namespace
@@ -174,4 +178,31 @@ TEST_CASE("mapping_engine: unknown action is kept but not executed; failed bypas
     f.state.erase("gate"); // engine says node not found
     f.engine.handle({ "footswitch:M", true });
     CHECK(f.changes.empty());
+}
+
+TEST_CASE("mapping_engine: callback may re-enter setMappings safely")
+{
+    Fixture f;
+    f.engine.setMappings({ tog("footswitch:L", "amp") }, {});
+    f.engine.onBypassChanged = [&](const juce::String& n, bool b) {
+        f.changes.emplace_back(n, b);
+        f.engine.setMappings({}, {}); // frees the mapping being dispatched
+    };
+    f.engine.handle({ "footswitch:L", true });
+    REQUIRE(f.changes.size() == 1);
+    CHECK(f.changes[0].first == "amp");
+    CHECK(f.engine.effectiveMappings().empty());
+}
+
+TEST_CASE("mapping_engine: learn disarms when armed node becomes invalid")
+{
+    Fixture f;
+    int learnedCount = 0;
+    f.engine.onLearned = [&](const Mapping&) { ++learnedCount; };
+    f.engine.beginLearn("amp");
+    f.engine.setValidNodes({ "gate" });
+    CHECK_FALSE(f.engine.isLearning());
+    f.engine.handle({ "footswitch:L", true });
+    CHECK(learnedCount == 0);
+    CHECK(f.engine.effectiveMappings().empty());
 }

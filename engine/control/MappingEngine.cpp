@@ -17,7 +17,12 @@ void MappingEngine::setMappings(std::vector<Mapping> rig, std::vector<Mapping> g
     globalMappings = std::move(global);
 }
 
-void MappingEngine::setValidNodes(juce::StringArray ids) { validNodes = std::move(ids); }
+void MappingEngine::setValidNodes(juce::StringArray ids)
+{
+    validNodes = std::move(ids);
+    if (learnNode && !validNodes.contains(*learnNode))
+        learnNode.reset(); // armed node was deleted: disarm
+}
 
 void MappingEngine::beginLearn(const juce::String& nodeId)
 {
@@ -70,8 +75,10 @@ void MappingEngine::handle(const ControlEvent& e)
     if (hit == nullptr || hit->action != kToggleBypass || !validNodes.contains(hit->node))
         return;
 
-    if (auto state = bypassFn(hit->node, std::nullopt))
+    // Copy before calling out: callbacks may re-enter setMappings and invalidate `hit`.
+    const juce::String node = hit->node;
+    if (auto state = bypassFn(node, std::nullopt))
         if (onBypassChanged)
-            onBypassChanged(hit->node, *state);
+            onBypassChanged(node, *state);
 }
 } // namespace amp
