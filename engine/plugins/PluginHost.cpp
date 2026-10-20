@@ -167,6 +167,12 @@ void PluginNode::process(juce::AudioBuffer<float>& io, int numSamples)
 
 bool PluginNode::isStereo() const { return stereo; }
 
+void PluginNode::reset()
+{
+    if (prepared)
+        plugin->reset();
+}
+
 juce::MemoryBlock PluginNode::getState() const
 {
     juce::MemoryBlock state;

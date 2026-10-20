@@ -127,7 +127,7 @@ bool RealtimeEngine::setBypass(const juce::String& nodeId, bool bypassed)
         return false;
     if (auto* n = requested->find(nodeId))
     {
-        n->bypass.store(bypassed);
+        n->requestBypass(bypassed);
         return true;
     }
     return false;
@@ -247,6 +247,17 @@ void RealtimeEngine::processChunk(const float* input, int offset, int n)
         finishFade();
 }
 
+void RealtimeEngine::guardOutput(int n)
+{
+    // Whatever a node did (a NaN from a plugin, a runaway filter), the device only ever gets finite samples in [-1, 1].
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        float* x = mainBuffer.getWritePointer(ch);
+        for (int i = 0; i < n; ++i)
+            x[i] = std::isfinite(x[i]) ? juce::jlimit(-1.0f, 1.0f, x[i]) : 0.0f;
+    }
+}
+
 void RealtimeEngine::audioDeviceIOCallbackWithContext(const float* const* inputChannelData, int numInputChannels,
                                                       float* const* outputChannelData, int numOutputChannels,
                                                       int numSamples, const juce::AudioIODeviceCallbackContext&)
@@ -283,6 +294,7 @@ void RealtimeEngine::audioDeviceIOCallbackWithContext(const float* const* inputC
         const int n = juce::jmin(juce::jmax(1, chunk), numSamples - pos);
 
         processChunk(input, pos, n);
+        guardOutput(n);
         if (outL != nullptr)
             juce::FloatVectorOperations::copy(outL + pos, mainBuffer.getReadPointer(0), n);
         if (outR != nullptr)

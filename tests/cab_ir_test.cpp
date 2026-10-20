@@ -223,3 +223,22 @@ TEST_CASE("cab_ir: non-finite params are ignored")
     REQUIRE((float) p["highCut"] == 8000.0f);
     REQUIRE((float) p["level"] == 0.0f);
 }
+
+TEST_CASE("cab_ir: params are clamped to their ranges")
+{
+    auto node = amp::makeCabIR();
+    node->setParam("lowCut", 0.0f);
+    node->setParam("highCut", 96000.0f);
+    node->setParam("level", 100.0f);
+    auto p = node->getParams();
+    CHECK((float) p["lowCut"] == 20.0f);
+    CHECK((float) p["highCut"] == 20000.0f);
+    CHECK((float) p["level"] == 12.0f);
+    node->setParam("lowCut", 9000.0f);
+    node->setParam("highCut", 10.0f);
+    node->setParam("level", -100.0f);
+    p = node->getParams();
+    CHECK((float) p["lowCut"] == 500.0f);
+    CHECK((float) p["highCut"] == 1000.0f);
+    CHECK((float) p["level"] == -24.0f);
+}

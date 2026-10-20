@@ -27,6 +27,9 @@ namespace amp
 // request is then faded in (intermediate ones are discarded unused), so the engine always settles on the last
 // requested plan.
 //
+// Output safety: before anything reaches the device, non-finite samples become 0 and the rest is hard-clipped to
+// [-1, 1]. Bypass changes ramp inside the plan (ProcessingPlan::bypassRampSeconds).
+//
 // Channel indices refer to the channel arrays passed to the device callback (JUCE packs active channels).
 class RealtimeEngine : public juce::AudioIODeviceCallback
 {
@@ -96,6 +99,7 @@ private:
     void startPendingFade();
     void finishFade();
     void processChunk(const float* input, int offset, int n);
+    void guardOutput(int n); // non-finite -> 0, then hard clip to [-1, 1]
 
     static constexpr int retireCapacity = 64;
 

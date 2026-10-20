@@ -29,6 +29,7 @@ public:
     /** Test support: delivers a pending edit notification now instead of on the message loop. */
     void dispatchPendingEdit() { handleUpdateNowIfNeeded(); }
     void prepare(const ProcessSpec&) override;
+    void reset() override; // AudioProcessor::reset()
     void process(juce::AudioBuffer<float>& io, int numSamples) override;
     bool isStereo() const override;
     juce::MemoryBlock getState() const override;

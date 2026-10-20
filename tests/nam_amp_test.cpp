@@ -226,3 +226,22 @@ TEST_CASE("nam_amp: no model = passthrough")
     for (int i = 0; i < in.getNumSamples(); ++i)
         REQUIRE(out.getSample(0, i) == in.getSample(0, i));
 }
+
+TEST_CASE("nam_amp: params are clamped to their ranges and non-finite values are ignored")
+{
+    auto node = amp::makeNamAmp();
+    node->setParam("inputGain", 1.0e30f);
+    node->setParam("outputGain", -200.0f);
+    CHECK((float) node->getParams()["inputGain"] == 24.0f);
+    CHECK((float) node->getParams()["outputGain"] == -24.0f);
+    node->setParam("inputGain", std::nanf(""));
+    node->setParam("outputGain", INFINITY);
+    node->setParam("normalize", std::nanf(""));
+    CHECK((float) node->getParams()["inputGain"] == 24.0f);
+    CHECK((float) node->getParams()["outputGain"] == -24.0f);
+    CHECK((float) node->getParams()["normalize"] == 1.0f);
+    node->setParam("normalize", 7.0f);
+    CHECK((float) node->getParams()["normalize"] == 1.0f);
+    node->setParam("normalize", -3.0f);
+    CHECK((float) node->getParams()["normalize"] == 0.0f);
+}

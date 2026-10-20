@@ -8,7 +8,7 @@ namespace amp
 {
 // Neural Amp Modeler capture (.nam). Mono, channel 0. Runs the model at its own sample rate and
 // resamples host -> model -> host when the device rate differs.
-// Params: inputGain dB (0), outputGain dB (0), normalize bool (1): when the model has "loudness"
+// Params: inputGain dB (0, [-24, 24]), outputGain dB (0, [-24, 24]), normalize bool (1): when the model has "loudness"
 // metadata, normalize adds (-18 - loudness) dB at the output. No model loaded = passthrough.
 class NamAmpNode : public ProcessorNode
 {
@@ -37,6 +37,7 @@ public:
     int underrunCount() const;
 
     void prepare(const ProcessSpec&) override;
+    void reset() override; // fresh model / resampler state (off the audio thread)
     void process(juce::AudioBuffer<float>& io, int numSamples) override;
     void setParam(const juce::String& name, float value) override;
     juce::NamedValueSet getParams() const override;

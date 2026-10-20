@@ -5,6 +5,8 @@
 
 #include <juce_dsp/juce_dsp.h>
 
+#include "dsp/ParamRanges.h"
+
 namespace amp
 {
 namespace
@@ -32,6 +34,8 @@ public:
         gate.reset();
     }
 
+    void reset() override { gate.reset(); }
+
     void process(juce::AudioBuffer<float>& io, int numSamples) override
     {
         const float t = threshold.load(), r = release.load();
@@ -45,8 +49,10 @@ public:
 
     void setParam(const juce::String& name, float v) override
     {
-        if (name == "threshold") threshold.store(v);
-        else if (name == "release") release.store(v);
+        const auto c = clampParam("Gate", name, v);
+        if (! c) return;
+        if (name == "threshold") threshold.store(*c);
+        else if (name == "release") release.store(*c);
     }
 
     juce::NamedValueSet getParams() const override
@@ -85,6 +91,8 @@ public:
         update();
     }
 
+    void reset() override { low.reset(); mid.reset(); high.reset(); }
+
     void process(juce::AudioBuffer<float>& io, int numSamples) override
     {
         update();
@@ -95,10 +103,12 @@ public:
 
     void setParam(const juce::String& name, float v) override
     {
-        if (name == "low") p[0].store(v);
-        else if (name == "mid") p[1].store(v);
-        else if (name == "high") p[2].store(v);
-        else if (name == "midFreq") p[3].store(v);
+        const auto c = clampParam("EQ", name, v);
+        if (! c) return;
+        if (name == "low") p[0].store(*c);
+        else if (name == "mid") p[1].store(*c);
+        else if (name == "high") p[2].store(*c);
+        else if (name == "midFreq") p[3].store(*c);
     }
 
     juce::NamedValueSet getParams() const override
@@ -165,7 +175,7 @@ public:
 
     void setParam(const juce::String& name, float v) override
     {
-        if (name == "level") level.store(v);
+        if (const auto c = clampParam("Output", name, v)) level.store(*c);
     }
 
     juce::NamedValueSet getParams() const override

@@ -142,3 +142,34 @@ TEST_CASE("builtin_nodes: params are block-size independent")
         maxDiff = juce::jmax(maxDiff, std::abs(o1.getSample(0, i) - o2.getSample(0, i)));
     REQUIRE(maxDiff < 1e-4f);
 }
+
+TEST_CASE("builtin_nodes: params are clamped to their ranges and non-finite values are ignored")
+{
+    auto gate = amp::makeGate();
+    gate->setParam("threshold", -200.0f);
+    gate->setParam("release", 1.0e9f);
+    CHECK((float) gate->getParams()["threshold"] == -90.0f);
+    CHECK((float) gate->getParams()["release"] == 1000.0f);
+    gate->setParam("threshold", std::nanf(""));
+    gate->setParam("release", -INFINITY);
+    CHECK((float) gate->getParams()["threshold"] == -90.0f);
+    CHECK((float) gate->getParams()["release"] == 1000.0f);
+
+    auto eq = amp::makeEQ();
+    eq->setParam("low", 50.0f);
+    eq->setParam("mid", -50.0f);
+    eq->setParam("high", INFINITY);
+    eq->setParam("midFreq", 1.0f);
+    CHECK((float) eq->getParams()["low"] == 12.0f);
+    CHECK((float) eq->getParams()["mid"] == -12.0f);
+    CHECK((float) eq->getParams()["high"] == 0.0f);
+    CHECK((float) eq->getParams()["midFreq"] == 200.0f);
+
+    auto out = amp::makeOutputGain();
+    out->setParam("level", 100.0f);
+    CHECK((float) out->getParams()["level"] == 12.0f);
+    out->setParam("level", std::nanf(""));
+    CHECK((float) out->getParams()["level"] == 12.0f);
+    out->setParam("level", -1000.0f);
+    CHECK((float) out->getParams()["level"] == -60.0f);
+}

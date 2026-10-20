@@ -7,6 +7,7 @@
 
 #include "dsp/CabIRNode.h"
 #include "dsp/NamAmpNode.h"
+#include "engine/RealtimeEngine.h"
 #include "model/ChainGraph.h"
 #include "storage/RigLoader.h"
 
@@ -458,4 +459,47 @@ TEST_CASE("rig_loader: non-linear doc returns error")
     juce::String error;
     REQUIRE_FALSE(f.loader->build(doc, spec, error).has_value());
     REQUIRE(error.contains("chain"));
+}
+
+TEST_CASE("rig_loader: hostile params from a rig file are clamped and the output stays finite and bounded")
+{
+    Fixture f;
+    f.addAsset("tiny.nam", "tiny.nam");
+    auto nam = nodeOf(amp::NodeType::NamAmp, "amp");
+    nam.asset = assetRef("nam", "tiny.nam", amp::AssetIndex::sha256Of(fixture("tiny.nam")));
+    nam.params.set("outputGain", 200.0);
+    nam.params.set("inputGain", 1.0e30);
+    auto gate = nodeOf(amp::NodeType::Gate, "gate");
+    gate.params.set("threshold", std::nan(""));
+    gate.params.set("release", -5.0);
+    auto doc = chainOf({ std::move(gate), std::move(nam) });
+
+    juce::String error;
+    auto live = f.loader->build(doc, spec, error);
+    REQUIRE(live.has_value());
+    const auto captured = f.loader->capture(*live);
+    CHECK(paramOf(findDoc(captured, "amp")->params, "outputGain") == 24.0f);
+    CHECK(paramOf(findDoc(captured, "amp")->params, "inputGain") == 24.0f);
+    CHECK(paramOf(findDoc(captured, "gate")->params, "threshold") == -55.0f); // NaN ignored: the default stays
+    CHECK(paramOf(findDoc(captured, "gate")->params, "release") == 5.0f);
+
+    amp::RealtimeEngine engine;
+    engine.prepareToPlay(spec.sampleRate, spec.maxBlock);
+    REQUIRE(engine.swapPlan(live->plan));
+    std::vector<float> in((size_t) spec.maxBlock), outL((size_t) spec.maxBlock), outR((size_t) spec.maxBlock);
+    const float* ins[] { in.data() };
+    float* outs[] { outL.data(), outR.data() };
+    for (int b = 0, t = 0; b < 200; ++b)
+    {
+        for (auto& x : in)
+            x = 0.9f * std::sin(2.0f * juce::MathConstants<float>::pi * 110.0f * (float) t++ / 48000.0f);
+        engine.audioDeviceIOCallbackWithContext(ins, 1, outs, 2, spec.maxBlock, {});
+        for (int i = 0; i < spec.maxBlock; ++i)
+        {
+            REQUIRE(std::isfinite(outL[(size_t) i]));
+            REQUIRE(std::abs(outL[(size_t) i]) <= 1.0f);
+            REQUIRE(std::abs(outR[(size_t) i]) <= 1.0f);
+        }
+    }
+    engine.drainRetired();
 }

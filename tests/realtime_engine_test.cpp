@@ -108,7 +108,7 @@ TEST_CASE("realtime_engine: bypassed node is skipped")
 
     REQUIRE(engine.setBypass("gain", true));
     REQUIRE(engine.getBypass("gain") == true);
-    dev.callback();
+    dev.run(0.05); // past the bypass ramp
     REQUIRE(allEqual(dev.out[0], 0.5f));
     REQUIRE(allEqual(dev.out[1], 0.5f));
 
@@ -298,8 +298,19 @@ TEST_CASE("realtime_engine: callback performs no allocation")
     for (int k = 0; k < 1000; ++k)
     {
         callback();
+        // Bypass toggles and their ramps are RT-safe too (a re-engaged node is reset off the audio thread).
         if (k == 500)
-            engine.setBypass("gate", true); // bypass toggles are RT-safe too
+            engine.setBypass("gate", true);
+        if (k == 200 || k == 600)
+            engine.setBypass("cab", true);
+        if (k == 300 || k == 700)
+            engine.setBypass("cab", false);
+        if (k == 400)
+            engine.setBypass("amp", true);
+        if (k == 402) // re-engaged mid-ramp
+            engine.setBypass("amp", false);
+        if (k == 800)
+            dev.in[0][3] = std::nanf(""); // the output guard runs on every callback
     }
     REQUIRE(dev.out[0] != std::vector<float>(kBlock, 0.0f)); // the chain really produced sound
     REQUIRE(amp::RtSafety::violations() == 0);
@@ -450,4 +461,115 @@ TEST_CASE("realtime_engine: RtSafety counts allocations inside ScopedNoAlloc")
     REQUIRE(amp::RtSafety::violations() == 4); // 2 allocations + 2 frees
     amp::RtSafety::reset();
     REQUIRE(amp::RtSafety::violations() == 0);
+}
+
+namespace
+{
+float maxStep(const std::vector<float>& v)
+{
+    float m = 0.0f;
+    for (size_t i = 1; i < v.size(); ++i)
+        m = juce::jmax(m, std::abs(v[i] - v[i - 1]));
+    return m;
+}
+
+// Writes NaN, +inf and a +5.0 sample into its block (a misbehaving plugin or a corrupt model).
+struct HostileNode final : amp::ProcessorNode
+{
+    void prepare(const amp::ProcessSpec&) override {}
+    void process(juce::AudioBuffer<float>& io, int n) override
+    {
+        for (int i = 0; i < n; ++i)
+            io.setSample(0, i, i % 3 == 0 ? std::nanf("") : i % 3 == 1 ? INFINITY : 5.0f);
+    }
+};
+} // namespace
+
+TEST_CASE("realtime_engine: a bypass toggle ramps instead of stepping")
+{
+    amp::RealtimeEngine engine;
+    engine.prepareToPlay(kRate, kBlock);
+    REQUIRE(engine.swapPlan(gainPlan(-12.0f)));
+    FakeDevice dev(engine, 1, 2);
+    dev.fillInput(0, 0.5f);
+    dev.run(0.1); // past the plan fade-in
+    REQUIRE(allEqual(dev.out[0], 0.5f * dbToGain(-12.0f)));
+
+    std::vector<float> rec { dev.out[0].back() }; // the last sample before the toggle
+    REQUIRE(engine.setBypass("gain", true));
+    dev.run(0.05, &rec);
+    CHECK(maxStep(rec) < 0.005f); // an instant switch would step by 0.375
+    CHECK(std::abs(rec.back() - 0.5f) < 1e-6f);
+
+    rec = { dev.out[0].back() };
+    REQUIRE(engine.setBypass("gain", false));
+    dev.run(0.05, &rec);
+    CHECK(maxStep(rec) < 0.005f);
+    CHECK(std::abs(rec.back() - 0.5f * dbToGain(-12.0f)) < 1e-6f);
+}
+
+TEST_CASE("realtime_engine: a re-engaged cab does not replay its pre-bypass tail")
+{
+    amp::RealtimeEngine engine;
+    engine.prepareToPlay(kRate, kBlock);
+    auto cab = amp::makeCabIR();
+    juce::String err;
+    REQUIRE(cab->loadIR(fixtures().getChildFile("assets/ir_48k.wav"), err));
+    const amp::CabIRNode* cabNode = cab.get();
+    REQUIRE(engine.swapPlan(plan({ planNode("cab", std::move(cab)) })));
+    FakeDevice dev(engine, 1, 2);
+
+    juce::Random rng(3);
+    const auto noise = [&] {
+        for (auto& x : dev.in[0])
+            x = rng.nextFloat() - 0.5f;
+    };
+    const auto deadline = juce::Time::getMillisecondCounter() + 5000;
+    while (! cabNode->irActive() && juce::Time::getMillisecondCounter() < deadline)
+    {
+        noise();
+        dev.callback();
+        juce::Thread::sleep(2);
+    }
+    REQUIRE(cabNode->irActive());
+    for (int b = 0; b < 400; ++b) // past the IR swap-in crossfade, loud input right up to the bypass
+    {
+        noise();
+        dev.callback();
+    }
+    REQUIRE(engine.setBypass("cab", true));
+    for (int b = 0; b < 20; ++b) // through the bypass ramp, still loud
+    {
+        noise();
+        dev.callback();
+    }
+    dev.fillInput(0, 0.0f);
+    dev.run(0.05); // bypassed and silent
+    REQUIRE(allEqual(dev.out[0], 0.0f));
+
+    std::vector<float> rec;
+    REQUIRE(engine.setBypass("cab", false));
+    dev.run(0.1, &rec);
+    float peak = 0.0f;
+    for (float x : rec)
+        peak = juce::jmax(peak, std::abs(x));
+    CHECK(peak < 1e-6f); // without a reset the convolver's history would ring out here
+}
+
+TEST_CASE("realtime_engine: the output guard silences non-finite samples and clips to full scale")
+{
+    amp::RealtimeEngine engine;
+    engine.prepareToPlay(kRate, kBlock);
+    REQUIRE(engine.swapPlan(plan({ planNode("bad", std::make_unique<HostileNode>()) })));
+    FakeDevice dev(engine, 1, 2);
+    dev.fillInput(0, 0.1f);
+    dev.run(0.1); // past the fade-in
+    for (int ch = 0; ch < 2; ++ch)
+        for (int i = 0; i < kBlock; ++i)
+        {
+            const float x = dev.out[(size_t) ch][(size_t) i];
+            INFO("ch " << ch << " i " << i << " = " << x);
+            REQUIRE(std::isfinite(x));
+            REQUIRE(x == (i % 3 == 2 ? 1.0f : 0.0f));
+        }
 }

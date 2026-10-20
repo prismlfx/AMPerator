@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <vector>
 
+#include "dsp/ParamRanges.h"
+
 #include "NAM/dsp.h"
 #include "NAM/get_dsp.h"
 
@@ -292,11 +294,20 @@ void NamAmpNode::process(juce::AudioBuffer<float>& io, int numSamples)
         impl->processChunk(ch + pos, juce::jmin(maxBlock, numSamples - pos));
 }
 
+void NamAmpNode::reset()
+{
+    if (impl->prepared)
+        impl->configure(); // fresh resamplers, output FIFO and model state (Reset() prewarms; allocates)
+}
+
 void NamAmpNode::setParam(const juce::String& name, float v)
 {
-    if (name == "inputGain") impl->inputGainDb.store(v);
-    else if (name == "outputGain") impl->outputGainDb.store(v);
-    else if (name == "normalize") impl->normalize.store(v >= 0.5f ? 1.0f : 0.0f);
+    const auto c = clampParam("NamAmp", name, v);
+    if (! c)
+        return;
+    if (name == "inputGain") impl->inputGainDb.store(*c);
+    else if (name == "outputGain") impl->outputGainDb.store(*c);
+    else if (name == "normalize") impl->normalize.store(*c >= 0.5f ? 1.0f : 0.0f);
 }
 
 juce::NamedValueSet NamAmpNode::getParams() const

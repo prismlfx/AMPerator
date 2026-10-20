@@ -8,7 +8,8 @@ namespace amp
 {
 // Speaker-cabinet impulse response (.wav). Mono, channel 0. Zero-added-latency convolution, then
 // lowCut (2nd-order high-pass, Q 0.707) and highCut (2nd-order low-pass, Q 0.707), then level.
-// Params: lowCut Hz (80, clamped [20, 500]), highCut Hz (8000, clamped [1000, 0.45*sr]), level dB (0).
+// Params: lowCut Hz (80, [20, 500]), highCut Hz (8000, [1000, 20000]; the filter itself stays below 0.45*sr),
+// level dB (0, [-24, 12]).
 // lowCut <= 20 Hz and highCut >= 20 kHz switch the respective filter off entirely.
 // Non-finite param values are ignored. No IR ever loaded = bit-exact passthrough
 // (between loadIR and the swap-in the convolver idles as a unit impulse, so audio is not interrupted).
@@ -27,6 +28,7 @@ public:
     bool irActive() const;
 
     void prepare(const ProcessSpec&) override;
+    void reset() override; // clears the convolver history and the cut filters
     void process(juce::AudioBuffer<float>& io, int numSamples) override;
     void setParam(const juce::String& name, float value) override;
     juce::NamedValueSet getParams() const override;

@@ -7,6 +7,8 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include "dsp/ParamRanges.h"
+
 namespace amp
 {
 struct CabIRNode::Impl
@@ -134,13 +136,22 @@ void CabIRNode::process(juce::AudioBuffer<float>& io, int numSamples)
     }
 }
 
+void CabIRNode::reset()
+{
+    impl->conv.reset();
+    impl->hp.reset();
+    impl->lp.reset();
+    impl->gain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(impl->level.load()));
+}
+
 void CabIRNode::setParam(const juce::String& name, float v)
 {
-    if (! std::isfinite(v))
+    const auto c = clampParam("CabIR", name, v);
+    if (! c)
         return;
-    if (name == "lowCut") impl->lowCut.store(v);
-    else if (name == "highCut") impl->highCut.store(v);
-    else if (name == "level") impl->level.store(v);
+    if (name == "lowCut") impl->lowCut.store(*c);
+    else if (name == "highCut") impl->highCut.store(*c);
+    else if (name == "level") impl->level.store(*c);
 }
 
 juce::NamedValueSet CabIRNode::getParams() const
