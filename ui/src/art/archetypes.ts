@@ -66,9 +66,9 @@ const AMP_RULES: [RegExp, string][] = [
   [/fender|\btwin\b|deluxe|blackface|bassman|clean/i, 'american-clean-combo'],
 ];
 const CAB_RULES: [RegExp, string][] = [
-  [/4x12|412/i, 'cab-4x12'],
-  [/2x12|212/i, 'cab-2x12'],
-  [/1x12|112|\bopen\b/i, 'cab-1x12-open'],
+  [/4x12|\b412\b/i, 'cab-4x12'],
+  [/2x12|\b212\b/i, 'cab-2x12'],
+  [/1x12|\b112\b|\bopen\b/i, 'cab-1x12-open'],
 ];
 const PEDAL_RULES: [RegExp, string][] = [
   [/drive|\bod\b|tube ?screamer|\bts9\b|ts808|klon|blues/i, 'drive'],

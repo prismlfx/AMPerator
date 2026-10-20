@@ -40,6 +40,11 @@ inline bool gMarkerDuringDestruction = false;
 enum class FakeEditorKind { None, Painted, Blank };
 inline FakeEditorKind gFakeEditor = FakeEditorKind::None;
 
+// Set by tests: FakeEditor's constructor records whether these files existed while the editor was being created.
+inline juce::File gEditorProbeFile;
+inline bool gProbeExistedDuringEditor = false;
+inline bool gCrashMarkerDuringEditor = false;
+
 struct ScopedFakeEditor
 {
     explicit ScopedFakeEditor(FakeEditorKind k) { gFakeEditor = k; }
@@ -49,7 +54,12 @@ struct ScopedFakeEditor
 class FakeEditor final : public juce::AudioProcessorEditor
 {
 public:
-    FakeEditor(juce::AudioProcessor& p, bool paintedIn) : AudioProcessorEditor(p), painted(paintedIn) { setSize(200, 100); }
+    FakeEditor(juce::AudioProcessor& p, bool paintedIn) : AudioProcessorEditor(p), painted(paintedIn)
+    {
+        gProbeExistedDuringEditor = gEditorProbeFile != juce::File() && gEditorProbeFile.exists();
+        gCrashMarkerDuringEditor = gCrashMarker != juce::File() && gCrashMarker.exists();
+        setSize(200, 100);
+    }
     void paint(juce::Graphics& g) override
     {
         if (! painted)

@@ -738,3 +738,24 @@ TEST_CASE("bridge: art requests resolve only to images inside Art/")
     REQUIRE(f.lib.createSymbolicLink(dirLink, true));
     CHECK(f.engine->artFileForRequest("/art/outside/secret.png") == juce::File());
 }
+
+TEST_CASE("bridge: user art images get a safe ASCII file name that the art path serves")
+{
+    Fixture f;
+    const auto amp = f.nodeOfType("NamAmp");
+    const auto image = f.dir.getChildFile(juce::String::fromUTF8("my photo \xc3\xa9.png"));
+    REQUIRE(image.replaceWithText("png"));
+    auto r = f.ok("setNodeArt", obj({ { "id", amp }, { "imageFile", image.getFullPathName() } }));
+    const juce::File stored(r["art"]["image"].toString());
+    REQUIRE(stored.existsAsFile());
+    CHECK(stored.getParentDirectory() == f.lib.getChildFile("Art"));
+    CHECK(stored.hasFileExtension("png"));
+    const auto name = stored.getFileName();
+    CHECK(name.containsOnly("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"));
+    CHECK(name.contains(amp));
+    CHECK(f.engine->artFileForRequest("/art/" + name) == stored);
+
+    // A second assignment never overwrites the first file.
+    auto r2 = f.ok("setNodeArt", obj({ { "id", amp }, { "imageFile", image.getFullPathName() } }));
+    CHECK(r2["art"]["image"].toString() != stored.getFullPathName());
+}

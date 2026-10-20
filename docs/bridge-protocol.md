@@ -21,10 +21,11 @@ symlinks and every other file (e.g. `user-art.json`) get a 404. In dev mode the 
 and the UI uses the absolute `juce://juce.backend/art/...` URL (macOS).
 
 **Plugin snapshots:** the first time a plugin is loaded (rig load or structural edit, before `rigLoaded` is sent), the
-engine creates its editor offscreen on the message thread, under the plugin crash marker, and caches a PNG
-(`Art/cache/<plugin id>-<hash>.png`, at most 480 px wide) if it drew anything. Editors that render blank offscreen
-(most native VST3/AU views) are remembered with a `.blank` file next to it and fall back to archetype art. Delete
-`Art/cache/` to retry.
+engine creates its editor offscreen on the message thread and caches a PNG (`Art/cache/<plugin id>-<hash>.png`, at
+most 480 px wide) if it drew anything. The attempt runs under its own marker, not the plugin crash marker (a crash
+there never blacklists the plugin): `<name>.blank` is written before the editor is created and removed only after the
+PNG is written. A leftover `.blank` (blank editor, e.g. most native VST3/AU views, or a crash) means the plugin is
+never snapshotted again and falls back to archetype art. Delete `Art/cache/` to retry.
 
 The UI is served from the embedded `ui/dist` (`WebBrowserComponent::getResourceProviderRoot()`); with the environment
 variable `AMP_UI_DEV=1` a Debug build of the app loads the Vite dev server at `http://localhost:5173` instead (`cd ui && npm run dev`).
@@ -109,7 +110,7 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `setTuner` | `on` (bool) | `{on}` | On: `tuner` events at 20 Hz until switched off. |
 | `toggleFavorite` | `id` | `{id, favorite}` | |
 | `restoreBackup` | `id` | `{id}` | Copies the newest `.bak` over the rig file (the current file is first kept as `<file>.corrupt` if unreadable, else `<file>.replaced`), then loads it. Works for rigs corrupted before this launch (found through their backups) → `rigLoaded`. No backup → `ok:false`. |
-| `setNodeArt` | `id`, `archetype?`, `imageFile?` | `{id, art: {archetype, image, snapshot}}` | `archetype` is stored in the rig (`rigDirty{true}`). `imageFile` (absolute path) is copied into `Art/` and recorded in `Art/user-art.json` under `"<rigId>/<nodeId>"` — never in the rig; `""` removes the assignment. |
+| `setNodeArt` | `id`, `archetype?`, `imageFile?` | `{id, art: {archetype, image, snapshot}}` | `archetype` is stored in the rig (`rigDirty{true}`). `imageFile` (absolute path) is copied into `Art/` under a generated ASCII name (`<rigId>-<nodeId>-<hash>.<ext>`, characters `[A-Za-z0-9._-]` only, so its `art/` URL needs no encoding on any platform) and recorded in `Art/user-art.json` under `"<rigId>/<nodeId>"` — never in the rig; `""` removes the assignment. |
 
 ## Events
 

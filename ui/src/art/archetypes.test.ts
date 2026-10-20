@@ -76,6 +76,9 @@ describe('guessArchetype', () => {
     expect(guessArchetype('CabIR', 'V30 4x12 SM57')).toBe('cab-4x12');
     expect(guessArchetype('CabIR', 'Blue 212')).toBe('cab-2x12');
     expect(guessArchetype('CabIR', 'Open back 1x12')).toBe('cab-1x12-open');
+    expect(guessArchetype('CabIR', 'Take 4123 SM57')).toBe('cab-2x12'); // digits inside a number don't count
+    expect(guessArchetype('CabIR', 'IR 21245')).toBe('cab-2x12');
+    expect(guessArchetype('CabIR', 'Mic 1124')).toBe('cab-2x12');
   });
 
   it('does not match keywords inside other words', () => {

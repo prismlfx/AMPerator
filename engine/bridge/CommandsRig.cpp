@@ -302,7 +302,24 @@ CommandResult Engine::setNodeArt(const juce::String& id, const std::optional<juc
             if (! juce::File::isAbsolutePath(*imageFile) || ! juce::File(*imageFile).existsAsFile())
                 return CommandResult::failure("image file not found: " + *imageFile);
             const juce::File src(*imageFile);
-            const auto dest = artDir().getNonexistentChildFile(src.getFileNameWithoutExtension(), src.getFileExtension(), false);
+            // A generated ASCII name ([A-Za-z0-9._-] only): the web view's art/ URL then needs no encoding, so it
+            // resolves the same on every platform (JUCE hands the resource provider a decoded path on macOS but the
+            // raw percent-encoded one on Windows).
+            const auto safe = [](const juce::String& text)
+            {
+                juce::String out;
+                for (auto c : text)
+                    out << ((c < 128 && juce::CharacterFunctions::isLetterOrDigit(c)) || c == '.' || c == '_' || c == '-'
+                                ? juce::String::charToString(c) : juce::String("_"));
+                return out;
+            };
+            const auto hash = juce::String::toHexString((src.getFullPathName() + key.toString()
+                                                         + juce::String(juce::Time::currentTimeMillis())).hashCode64())
+                                  .paddedLeft('0', 16).substring(0, 8);
+            const auto ext = safe(src.getFileExtension().toLowerCase().trimCharactersAtStart("."));
+            const auto dest = artDir().getNonexistentChildFile(safe(live->doc.id).substring(0, 40) + "-" + safe(id).substring(0, 40)
+                                                                   + "-" + hash,
+                                                               ext.isEmpty() ? juce::String() : "." + ext, false);
             if (! src.copyFileTo(dest))
                 return CommandResult::failure("could not copy the image into " + artDir().getFullPathName());
             entries->setProperty(key, dest.getFileName());

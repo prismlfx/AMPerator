@@ -327,10 +327,13 @@ juce::File PluginHost::snapshotEditor(juce::AudioPluginInstance& plugin, const j
     if (blankMarker.exists() || uid.isEmpty() || ! plugin.hasEditor() || plugin.getActiveEditor() != nullptr)
         return {};
 
+    // The snapshot is optional: a plugin whose editor crashes offscreen must not be blacklisted for audio. So it runs
+    // under its own marker instead of the plugin crash marker: <name>.blank is written first and removed only after a
+    // PNG was written. A leftover .blank (blank editor, or a crash in here) means "never snapshot this plugin again".
+    if (! cacheDir.createDirectory() || ! blankMarker.replaceWithText(uid))
+        return {};
     juce::Image image;
     {
-        // Creating, painting and deleting a plugin editor all call into the plugin.
-        const ScopedCrashMarker guard(dataDir.getChildFile(kCrashMarkerFile), uid);
         std::unique_ptr<juce::AudioProcessorEditor> editor(plugin.createEditorAndMakeActive());
         if (editor == nullptr)
             return {};
@@ -341,19 +344,12 @@ juce::File PluginHost::snapshotEditor(juce::AudioPluginInstance& plugin, const j
         plugin.editorBeingDeleted(editor.get()); // what a host window does before deleting the editor
         editor.reset();
     }
-
     if (isBlank(image))
-    {
-        if (cacheDir.createDirectory())
-            blankMarker.create();
         return {};
-    }
     if (image.getWidth() > kMaxSnapshotWidth)
         image = image.rescaled(kMaxSnapshotWidth, juce::jmax(1, image.getHeight() * kMaxSnapshotWidth / image.getWidth()),
                                juce::Graphics::highResamplingQuality);
 
-    if (! cacheDir.createDirectory())
-        return {};
     const auto temp = png.withFileExtension("tmp");
     {
         temp.deleteFile();
@@ -365,7 +361,10 @@ juce::File PluginHost::snapshotEditor(juce::AudioPluginInstance& plugin, const j
             return {};
         }
     }
-    return temp.moveFileTo(png) ? png : juce::File();
+    if (! temp.moveFileTo(png))
+        return {};
+    blankMarker.deleteFile();
+    return png;
 }
 
 bool PluginHost::isBlacklisted(const juce::PluginDescription& d) const

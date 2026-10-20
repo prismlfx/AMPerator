@@ -61,9 +61,12 @@ function gearName(n: RigNode): string {
 }
 
 function isTyping(target: EventTarget | null): boolean {
-  const t = (target instanceof Element ? target : null) ?? document.activeElement;
-  const active = document.activeElement;
-  return [t, active].some((x) => x instanceof Element && !!x.closest('input, textarea, select, [contenteditable="true"]'));
+  return [target, document.activeElement].some(
+    // isContentEditable covers inherited editing; the selector is a fallback where it is not implemented (jsdom).
+    (x) =>
+      x instanceof HTMLElement &&
+      (x.isContentEditable || !!x.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')),
+  );
 }
 
 /** Renders the stage view into `root`; returns a function that removes its listeners. */

@@ -197,6 +197,50 @@ describe('stage view', () => {
     expect(juce.commands().length).toBeGreaterThanOrEqual(m);
   });
 
+  it('keyboard shortcuts are ignored while a dialog is open or a learn is armed', async () => {
+    await started();
+    unmount = stage.renderStage(root);
+    const n = juce.commands().length;
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    document.body.append(backdrop);
+    key('t');
+    key('ArrowRight');
+    key('e');
+    await flush();
+    backdrop.remove();
+    expect(juce.commands()).toHaveLength(n);
+    expect(state.store.get().view).toBe('stage');
+
+    state.setLearning(true, 'drv');
+    key('t');
+    key('ArrowLeft');
+    key('e');
+    await flush();
+    expect(juce.commands()).toHaveLength(n);
+    expect(state.store.get().view).toBe('stage');
+
+    state.setLearning(false);
+    key('t');
+    expect(lastCommand()).toMatchObject({ cmd: 'setTuner', args: { on: true } });
+  });
+
+  it('keyboard shortcuts are ignored in a contenteditable element', async () => {
+    await started();
+    unmount = stage.renderStage(root);
+    const n = juce.commands().length;
+    const div = document.createElement('div');
+    div.setAttribute('contenteditable', '');
+    const child = document.createElement('span');
+    div.append(child);
+    document.body.append(div);
+    key('t', child);
+    key('e', child);
+    expect(juce.commands()).toHaveLength(n);
+    expect(state.store.get().view).toBe('stage');
+  });
+
   it('the input meter follows meter events', async () => {
     await started();
     unmount = stage.renderStage(root);

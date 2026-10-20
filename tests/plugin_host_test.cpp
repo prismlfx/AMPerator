@@ -353,6 +353,39 @@ TEST_CASE("plugin_host: snapshotEditor caches nothing for a blank editor or none
     CHECK(f.host->snapshotEditor(f.instance(), f.ref.uid, f.cache) == juce::File());
 }
 
+TEST_CASE("plugin_host: snapshot runs under its own marker, so a crash there never blacklists the plugin")
+{
+    SnapshotFixture f;
+    const ScopedFakeEditor editor(FakeEditorKind::Painted);
+    const auto blank = amp::PluginHost::snapshotFile(f.cache, f.ref.uid).withFileExtension("blank");
+    gEditorProbeFile = blank;
+    gCrashMarker = f.dir.getChildFile("crash-marker");
+
+    REQUIRE(f.host->snapshotEditor(f.instance(), f.ref.uid, f.cache).existsAsFile());
+    CHECK(gProbeExistedDuringEditor);       // the snapshot marker was in place while the editor was created...
+    CHECK_FALSE(gCrashMarkerDuringEditor);  // ...the plugin crash marker was not
+    CHECK_FALSE(blank.exists());            // removed after the PNG was written
+    gEditorProbeFile = juce::File();
+    gCrashMarker = juce::File();
+}
+
+TEST_CASE("plugin_host: a snapshot that crashed is not retried and the plugin stays usable")
+{
+    SnapshotFixture f;
+    const ScopedFakeEditor editor(FakeEditorKind::Painted);
+    const auto blank = amp::PluginHost::snapshotFile(f.cache, f.ref.uid).withFileExtension("blank");
+    REQUIRE(f.cache.createDirectory());
+    REQUIRE(blank.replaceWithText(f.ref.uid)); // what a crash inside snapshotEditor leaves behind
+
+    auto host = f.makeHost(); // next launch
+    host->checkCrashMarkerOnStartup();
+    CHECK(host->blacklisted().isEmpty());
+    CHECK(host->snapshotEditor(f.instance(), f.ref.uid, f.cache) == juce::File()); // never tried again
+    CHECK_FALSE(amp::PluginHost::snapshotFile(f.cache, f.ref.uid).exists());
+    juce::String error;
+    CHECK(host->create(f.ref, spec, error) != nullptr);
+}
+
 TEST_CASE("plugin_host: snapshot file names are safe for any plugin id")
 {
     const juce::File cache("/tmp/cache");
