@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <optional>
 #include <vector>
 
 #include "dsp/BuiltinNodes.h"
@@ -203,9 +204,12 @@ TEST_CASE("realtime_engine: crossfade is sample-accurate across block boundaries
     REQUIRE(engine.swapPlan(plan({ planNode("p", amp::makePlaceholder()) })));
     std::vector<float> rec;
     dev.run(0.05, &rec);
-    // Fade in from silence: out[t] = sin(pi/2 * t / 1440), then exactly 1.
+    // Fade in from silence: out[t] = sin^2(pi/2 * t / 1440), then exactly 1.
     for (int t = 0; t < 1440; ++t)
-        REQUIRE(std::abs(rec[(size_t) t] - std::sin(juce::MathConstants<float>::halfPi * (float) t / 1440.0f)) < 1e-5f);
+    {
+        const float s = std::sin(juce::MathConstants<float>::halfPi * (float) t / 1440.0f);
+        REQUIRE(std::abs(rec[(size_t) t] - s * s) < 1e-5f);
+    }
     for (size_t t = 1440; t < rec.size(); ++t)
         REQUIRE(rec[t] == 1.0f);
 }
@@ -247,10 +251,7 @@ TEST_CASE("realtime_engine: rapid plan swaps settle on last plan")
     for (float x : rec)
         outPeak = std::max(outPeak, std::abs(x));
     INFO("output peak " << outPeak << " vs input peak " << inPeak);
-    // Every plan has gain <= 0 dB. An equal-power (sin/cos) crossfade between two such plans fed the same
-    // signal peaks at sqrt(gA^2 + gB^2) <= sqrt(2) (+3 dB, reached when both plans are 0 dB) mid-fade; the
-    // brief's literal "<= input peak" only holds for an equal-gain fade (see task-8 report, concern 1).
-    REQUIRE(outPeak <= inPeak * std::sqrt(2.0f) + 1e-6f);
+    REQUIRE(outPeak <= inPeak);
 
     engine.drainRetired();
     REQUIRE(engine.retiredPending() == 0);
@@ -302,6 +303,40 @@ TEST_CASE("realtime_engine: callback performs no allocation")
     }
     REQUIRE(dev.out[0] != std::vector<float>(kBlock, 0.0f)); // the chain really produced sound
     REQUIRE(amp::RtSafety::violations() == 0);
+}
+
+TEST_CASE("realtime_engine: many swaps keep working while retired plans are drained")
+{
+    // Far more swaps than the retire queue holds (63): fades must keep starting as long as someone drains.
+    amp::RealtimeEngine engine;
+    engine.prepareToPlay(kRate, kBlock);
+    FakeDevice dev(engine, 1, 2);
+    dev.fillInput(0, 0.5f);
+    constexpr int swaps = 150;
+    for (int i = 1; i <= swaps; ++i)
+    {
+        const float db = i == swaps ? -12.0f : (i % 2 == 0 ? 0.0f : -6.0f);
+        REQUIRE(engine.swapPlan(gainPlan(db)));
+        dev.run(0.035); // longer than one fade: every swap is actually faded in
+        const float level = 20.0f * std::log10(dev.out[0].back() / 0.5f);
+        INFO("swap " << i);
+        REQUIRE(std::abs(level - db) < 0.01f);
+        engine.drainRetired();
+        REQUIRE(engine.retiredPending() == 0);
+    }
+}
+
+TEST_CASE("realtime_engine: drain timer starts lazily when the MessageManager appears later")
+{
+    std::optional<amp::RealtimeEngine> engine;
+    engine.emplace(); // no MessageManager yet: no timer
+    REQUIRE_FALSE(engine->drainTimerRunning());
+    {
+        const juce::ScopedJuceInitialiser_GUI juce; // this thread becomes the message thread
+        REQUIRE(engine->swapPlan(gainPlan(0.0f)));
+        REQUIRE(engine->drainTimerRunning());
+        engine.reset(); // timer must die before the MessageManager does
+    }
 }
 
 TEST_CASE("realtime_engine: setBypass unknown id returns false")

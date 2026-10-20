@@ -17,11 +17,13 @@ namespace amp
 // Threading: the audio callback never allocates, locks, or frees. Plans reach the audio thread through a
 // single atomic slot (newer requests replace older ones that the audio thread has not picked up yet) and
 // leave it through a lock-free retire queue that the message thread drains (a juce::Timer when a
-// MessageManager exists, or drainRetired() directly). The audio thread therefore never drops the last
+// MessageManager exists — created at construction or lazily by the first swapPlan() on the message thread —
+// or drainRetired() directly). The audio thread therefore never drops the last
 // reference to a plan or node.
 //
-// Plan swaps crossfade over 30 ms with equal-power (sin/cos) gains, sample-accurately across block
-// boundaries. A swap requested while a crossfade is running waits until it ends; only the most recent
+// Plan swaps crossfade over 30 ms with equal-gain (sin^2/cos^2, summing to 1) gains, sample-accurately across
+// block boundaries. Both plans are fed the same guitar input, so their outputs are correlated: equal-gain keeps
+// the level steady and never overshoots, where an equal-power fade would bump by up to +3 dB. A swap requested while a crossfade is running waits until it ends; only the most recent
 // request is then faded in (intermediate ones are discarded unused), so the engine always settles on the last
 // requested plan.
 //
@@ -59,7 +61,8 @@ public:
     std::optional<bool> getBypass(const juce::String& nodeId) const;
 
     // Peak level since the previous read, in dBFS, floored at silenceDb. Input = selected input channel,
-    // output = max of the written output pair. Reading resets the peak.
+    // output = max of the written output pair. Each read resets the peak, so there must be a single reader
+    // (e.g. the UI meter timer); a second reader would steal peaks from the first.
     float inputPeakDb() const;
     float outputPeakDb() const;
 
@@ -79,6 +82,9 @@ public:
     void audioDeviceAboutToStart(juce::AudioIODevice*) override;
     void audioDeviceStopped() override;
 
+    // Message thread. Test support: true once the retire-queue drain timer runs.
+    bool drainTimerRunning() const { return drainTimer != nullptr; }
+
 private:
     // Heap-allocated owner of one plan reference. The audio thread only ever passes these around as raw
     // pointers; they are deleted off the audio thread.
@@ -93,7 +99,9 @@ private:
 
     static constexpr int retireCapacity = 64;
 
-    std::unique_ptr<juce::TimedCallback> drainTimer; // only when a MessageManager exists
+    void ensureDrainTimer(); // message thread only
+
+    std::unique_ptr<juce::TimedCallback> drainTimer; // only when a MessageManager exists; message thread only
 
     // Message-thread side
     mutable juce::CriticalSection requestLock; // never taken on the audio thread
@@ -110,6 +118,7 @@ private:
     int fadePos = 0, fadeLength = 0;
     juce::AudioBuffer<float> mainBuffer, fadeBuffer;
     int chunkCapacity = 0;
+    bool warnedRetireFull = false;
     double preparedRate = 0.0;
 
     std::atomic<double> runningRate { 0.0 }; // 0 = device not running

@@ -31,13 +31,18 @@ float readPeakDb(std::atomic<float>& peak)
 
 RealtimeEngine::RealtimeEngine()
 {
+    ensureDrainTimer();
+}
+
+void RealtimeEngine::ensureDrainTimer()
+{
     // Timers need a MessageManager (even constructing one starts JUCE's timer thread); headless tests have
-    // none and call drainRetired() themselves.
-    if (juce::MessageManager::getInstanceWithoutCreating() != nullptr)
-    {
-        drainTimer = std::make_unique<juce::TimedCallback>([this] { drainRetired(); });
-        drainTimer->startTimer(100);
-    }
+    // none and call drainRetired() themselves. If the engine was built before the MessageManager existed,
+    // the first swapPlan() on the message thread creates the timer.
+    if (drainTimer != nullptr || ! juce::MessageManager::existsAndIsCurrentThread())
+        return;
+    drainTimer = std::make_unique<juce::TimedCallback>([this] { drainRetired(); });
+    drainTimer->startTimer(100);
 }
 
 RealtimeEngine::~RealtimeEngine()
@@ -91,6 +96,7 @@ void RealtimeEngine::prepareToPlay(double sampleRate, int maxBlock)
 
 bool RealtimeEngine::swapPlan(std::shared_ptr<ProcessingPlan> plan)
 {
+    ensureDrainTimer();
     const juce::ScopedLock sl(requestLock);
     if (plan != nullptr)
     {
@@ -161,9 +167,16 @@ void RealtimeEngine::audioDeviceStopped() { runningRate.store(0.0); }
 
 void RealtimeEngine::startPendingFade()
 {
-    // Finishing a fade retires one plan; only start when that retirement is guaranteed a queue slot.
-    if (incoming != nullptr || retireFifo.getFreeSpace() < 2 || pending.load(std::memory_order_relaxed) == nullptr)
+    if (incoming != nullptr || pending.load(std::memory_order_relaxed) == nullptr)
         return;
+    // Finishing a fade retires one plan; only start when that retirement is guaranteed a queue slot.
+    if (retireFifo.getFreeSpace() < 2)
+    {
+        // Nobody drains the retire queue (no drain timer, no drainRetired() calls): swaps are stuck.
+        jassert(warnedRetireFull);
+        warnedRetireFull = true;
+        return;
+    }
     PlanRef* next = pending.exchange(nullptr, std::memory_order_acq_rel);
     if (next == nullptr)
         return;
@@ -223,8 +236,10 @@ void RealtimeEngine::processChunk(const float* input, int offset, int n)
                 out[i] = in[i];
                 continue;
             }
-            const float x = halfPi * (float) t / (float) fadeLength; // equal power: cos^2 + sin^2 = 1
-            out[i] = out[i] * std::cos(x) + in[i] * std::sin(x);
+            // Equal gain: cos^2 + sin^2 = 1, so correlated plan outputs never sum above either plan's level.
+            const float s = std::sin(halfPi * (float) t / (float) fadeLength);
+            const float gIn = s * s;
+            out[i] = out[i] * (1.0f - gIn) + in[i] * gIn;
         }
     }
     fadePos += n;
@@ -237,6 +252,7 @@ void RealtimeEngine::audioDeviceIOCallbackWithContext(const float* const* inputC
                                                       int numSamples, const juce::AudioIODeviceCallbackContext&)
 {
     const RtSafety::ScopedNoAlloc noAlloc;
+    const juce::ScopedNoDenormals noDenormals;
 
     for (int ch = 0; ch < numOutputChannels; ++ch)
         if (outputChannelData[ch] != nullptr)
