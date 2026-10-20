@@ -287,3 +287,88 @@ TEST_CASE("audio_io: usingPreferred is true when the named device opened")
     REQUIRE(f.io->apply(Fixture::solo()).wasOk());
     CHECK(f.io->usingPreferred());
 }
+
+TEST_CASE("audio_io: a listed but unopenable preferred device is tried once per device-list change")
+{
+    Fixture f;
+    f.type->removeDevice("Fake Solo");
+    REQUIRE(f.io->apply(Fixture::solo()).wasOk());
+    REQUIRE(f.currentName() == "Fake Other");
+    std::vector<DeviceStatus> seen;
+    f.io->onStatus = [&](DeviceStatus s) { seen.push_back(s); };
+
+    // The preferred device shows up, but another app holds it.
+    f.type->addDevice("Fake Solo");
+    f.type->refuseOpen.add("Fake Solo");
+    f.type->openCalls.clear();
+    f.type->closeCalls.clear();
+    f.hotPlug();
+    CHECK(f.type->openCalls.indexOf("Fake Solo") >= 0);
+
+    // Our own close / reopen of the fallback produces change notifications too; none of them may retry.
+    for (int i = 0; i < 5; ++i)
+        f.manager.sendSynchronousChangeMessage();
+    int soloAttempts = 0, otherCloses = 0;
+    for (auto& n : f.type->openCalls)
+        soloAttempts += n == "Fake Solo" ? 1 : 0;
+    for (auto& n : f.type->closeCalls)
+        otherCloses += n == "Fake Other" ? 1 : 0;
+    CHECK(soloAttempts == 1);
+    CHECK(otherCloses <= 1);
+    CHECK(f.currentName() == "Fake Other");
+    CHECK(f.io->status() == DeviceStatus::Running);
+    CHECK(f.manager.getCurrentAudioDevice()->isPlaying());
+    CHECK(seen.empty()); // the fallback kept running: no Disconnected flicker
+
+    // Released by the other app: nothing to notice until the device list changes again...
+    f.type->refuseOpen.clear();
+    f.manager.sendSynchronousChangeMessage();
+    CHECK(f.currentName() == "Fake Other");
+    // ...which it does here (another device appears): the preferred device is tried again and opens.
+    f.type->addDevice("Fake Third");
+    f.hotPlug();
+    CHECK(f.currentName() == "Fake Solo");
+    CHECK(f.io->usingPreferred());
+    CHECK(f.io->status() == DeviceStatus::Running);
+}
+
+TEST_CASE("audio_io: an explicit apply retries a preferred device that failed to open")
+{
+    Fixture f;
+    f.type->removeDevice("Fake Solo");
+    REQUIRE(f.io->apply(Fixture::solo()).wasOk());
+    f.type->addDevice("Fake Solo");
+    f.type->refuseOpen.add("Fake Solo");
+    f.hotPlug();
+    f.manager.sendSynchronousChangeMessage();
+    REQUIRE(f.currentName() == "Fake Other");
+
+    f.type->refuseOpen.clear();
+    f.manager.sendSynchronousChangeMessage(); // same list: not retried by itself
+    REQUIRE(f.currentName() == "Fake Other");
+    REQUIRE(f.io->apply(Fixture::solo()).wasOk()); // the user re-selects it
+    CHECK(f.currentName() == "Fake Solo");
+    CHECK(f.io->usingPreferred());
+}
+
+TEST_CASE("audio_io: change notifications do not keep retrying a preferred device that failed to open")
+{
+    Fixture f;
+    f.type->refuseOpen.add("Fake Solo"); // listed, but held by another app
+    REQUIRE(f.io->apply(Fixture::solo()).failed());
+    REQUIRE(f.io->status() == DeviceStatus::NoDevice);
+    f.type->openCalls.clear();
+
+    // Each failed open posts a change notification of its own; none of them is a device-list change.
+    for (int i = 0; i < 5; ++i)
+        f.manager.sendSynchronousChangeMessage();
+    CHECK(f.type->openCalls.isEmpty());
+    CHECK(f.io->status() == DeviceStatus::NoDevice);
+
+    f.type->refuseOpen.clear();
+    f.type->addDevice("Fake Third"); // a real list change: tried again, and now it opens
+    f.hotPlug();
+    CHECK(f.type->openCalls.size() == 1);
+    CHECK(f.currentName() == "Fake Solo");
+    CHECK(f.io->status() == DeviceStatus::Running);
+}

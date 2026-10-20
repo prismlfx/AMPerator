@@ -12,7 +12,8 @@ FakeDevice::~FakeDevice()
 juce::String FakeDevice::open(const juce::BigInteger& inputs, const juce::BigInteger& outputs, double sampleRate,
                               int bufferSize)
 {
-    if (type.failOpen)
+    type.openCalls.add(getName());
+    if (type.failOpen || type.refuseOpen.contains(getName()))
         return lastError = "Fake device refused to open";
     if (! getAvailableSampleRates().contains(sampleRate) || ! getAvailableBufferSizes().contains(bufferSize))
         return lastError = "Unsupported rate or buffer size";
@@ -32,6 +33,8 @@ juce::String FakeDevice::open(const juce::BigInteger& inputs, const juce::BigInt
 void FakeDevice::close()
 {
     stop();
+    if (opened)
+        type.closeCalls.add(getName());
     opened = false;
 }
 

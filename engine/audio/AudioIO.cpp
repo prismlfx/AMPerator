@@ -124,7 +124,11 @@ juce::Result AudioIO::apply(const Settings& s)
 {
     preferred = s;
     onFallback = s.audioDeviceName.isNotEmpty(); // until the named device actually opens
-    return applyInternal(s, false);
+    preferredFailedList.reset(); // an explicit request always tries
+    auto result = applyInternal(s, false);
+    if (result.failed() && s.audioDeviceName.isNotEmpty() && isListed(s.audioDeviceName))
+        preferredFailedList = deviceListSnapshot();
+    return result;
 }
 
 bool AudioIO::usingPreferred() const
@@ -139,6 +143,19 @@ bool AudioIO::isListed(const juce::String& deviceName) const
         if (t->getDeviceNames(false).contains(deviceName) || t->getDeviceNames(true).contains(deviceName))
             return true;
     return false;
+}
+
+juce::StringArray AudioIO::deviceListSnapshot() const
+{
+    juce::StringArray all;
+    for (auto* t : manager.getAvailableDeviceTypes())
+    {
+        all.add("[" + t->getTypeName() + "]");
+        all.addArray(t->getDeviceNames(false));
+        all.add("|");
+        all.addArray(t->getDeviceNames(true));
+    }
+    return all;
 }
 
 juce::Result AudioIO::applyInternal(const Settings& s, bool reconnecting)
@@ -332,13 +349,31 @@ void AudioIO::changeListenerCallback(juce::ChangeBroadcaster*)
         return;
 
     // A fallback is running (or nothing could be opened): switch to the preferred device once it is listed again.
+    // If it is listed but will not open, wait for the device list to change before trying again: our own attempt
+    // (and the fallback reopen) post change notifications that must not retry it.
     if ((onFallback || ! hasWanted) && preferred.audioDeviceName.isNotEmpty()
         && isListed(preferred.audioDeviceName)) // any type: findType() picks the one that lists it
     {
         auto* current = manager.getCurrentAudioDevice();
         if (current == nullptr || current->getName() != preferred.audioDeviceName || ! deviceRunning())
-            if (applyInternal(Settings(preferred), true).wasOk())
-                return;
+        {
+            auto list = deviceListSnapshot();
+            if (! preferredFailedList.has_value() || *preferredFailedList != list)
+            {
+                if (applyInternal(Settings(preferred), true).wasOk())
+                {
+                    preferredFailedList.reset();
+                    return;
+                }
+                preferredFailedList = std::move(list);
+                // The failed open closed the fallback: bring it straight back (still a fallback for `preferred`).
+                if (hasWanted && onFallback && applyInternal(Settings(wanted), true).wasOk())
+                {
+                    onFallback = true;
+                    return;
+                }
+            }
+        }
     }
 
     if (! hasWanted)

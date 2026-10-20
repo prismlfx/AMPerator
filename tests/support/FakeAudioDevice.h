@@ -71,6 +71,9 @@ public:
 
     int inputLatency = 0, outputLatency = 0; // applied to devices when queried
     bool failOpen = false;                   // open() of any device reports an error
+    juce::StringArray refuseOpen;            // devices whose open() reports an error (listed but busy / hogged)
+    juce::StringArray openCalls;             // every open() attempt, by device name
+    juce::StringArray closeCalls;            // every close() of an open device, by device name
 
     juce::StringArray names;
     juce::String defaultName = "Fake Other";

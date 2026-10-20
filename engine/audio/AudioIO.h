@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 
 #include <juce_audio_devices/juce_audio_devices.h>
 
@@ -77,6 +78,7 @@ private:
     void changeListenerCallback(juce::ChangeBroadcaster*) override;
     bool deviceRunning() const;
     bool isListed(const juce::String& deviceName) const; // by any device type
+    juce::StringArray deviceListSnapshot() const;          // every device name of every type, in order
     void setStatus(DeviceStatus);
     void notifyRestarted(double sampleRate, int bufferSize);
     void routeEngineChannels();
@@ -97,6 +99,8 @@ private:
     Settings wanted; // what to reapply on reconnect; audioDeviceType/Name are the devices actually chosen
     Settings preferred; // what the last apply() asked for; reopened when it reappears while a fallback runs
     bool onFallback = false; // the open (or lost) device is a fallback for `preferred`
+    // The device list when `preferred` last failed to open while listed; it is not retried until the list differs.
+    std::optional<juce::StringArray> preferredFailedList;
     int wantedInput = 0, wantedOutputFirst = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioIO)
