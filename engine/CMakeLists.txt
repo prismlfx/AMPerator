@@ -46,6 +46,8 @@ add_library(amp_engine STATIC
   storage/AtomicFile.cpp
   storage/AtomicFile.h
   storage/RigStore.cpp
+  storage/RigLoader.cpp
+  storage/RigLoader.h
   storage/RigStore.h
   storage/Settings.cpp
   storage/Settings.h)
