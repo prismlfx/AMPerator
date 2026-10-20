@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -16,18 +17,22 @@ namespace amp
 // Mono-input plugins read channel 0. process() does not allocate (plugins with more than 2 channels get
 // preallocated scratch channels, cleared every block). isStereo() = main output bus has >= 2 channels.
 // The first prepare() and teardown are crash-marker guarded; a repeat prepare() releases resources first.
-class PluginNode : public ProcessorNode, private juce::AudioProcessorListener, private juce::AsyncUpdater
+class PluginNode : public ProcessorNode, private juce::AudioProcessorListener, private juce::Timer
 {
 public:
     PluginNode(std::unique_ptr<juce::AudioPluginInstance>, juce::File crashMarker, juce::String pluginId);
     ~PluginNode() override;
 
     /** Message thread. Non-null: from now on, edits made in the plugin (a parameter change, or a program / state change
-        the plugin reports) call `fn` on the message thread, coalesced. Earlier changes (e.g. setState() while the rig
-        was built) are dropped. Null: stop listening (pending notifications are dropped). */
+        the plugin reports) call `fn` on the message thread, coalesced: the plugin's notification only sets a flag
+        (any thread, lock- and allocation-free) that a message-thread timer polls every editPollMs. Earlier changes
+        (e.g. setState() while the rig was built) are dropped. Null: stop listening (pending notifications are
+        dropped) and stop the timer. */
     void setOnEdited(std::function<void()> fn);
-    /** Test support: delivers a pending edit notification now instead of on the message loop. */
-    void dispatchPendingEdit() { handleUpdateNowIfNeeded(); }
+    /** Message thread. Delivers a pending edit notification now (what the timer does); also used by tests. */
+    void dispatchPendingEdit();
+
+    static constexpr int editPollMs = 100;
     void prepare(const ProcessSpec&) override;
     void reset() override; // AudioProcessor::reset()
     void process(juce::AudioBuffer<float>& io, int numSamples) override;
@@ -39,13 +44,15 @@ public:
     juce::AudioPluginInstance* instance() const { return plugin.get(); }
 
 private:
-    // Any thread (plugins may report from their audio or UI threads); triggerAsyncUpdate does not allocate.
-    void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override { triggerAsyncUpdate(); }
+    // Any thread (plugins may report from their audio or UI threads): only a relaxed atomic store.
+    void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override { markEdited(); }
     void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails&) override;
-    void handleAsyncUpdate() override;
+    void markEdited() { edited.store(true, std::memory_order_relaxed); }
+    void timerCallback() override { dispatchPendingEdit(); }
 
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     std::function<void()> onEdited;
+    std::atomic<bool> edited { false };
     juce::File crashMarker;
     juce::String pluginId;
     bool everPrepared = false;

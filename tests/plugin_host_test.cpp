@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <optional>
+#include <thread>
+#include <type_traits>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>
@@ -393,4 +395,43 @@ TEST_CASE("plugin_host: snapshot file names are safe for any plugin id")
     CHECK(f.getParentDirectory() == cache);
     CHECK(f.hasFileExtension("png"));
     CHECK_FALSE(f.getFileName().containsAnyOf("/\\:"));
+}
+
+// Posting a message (juce::AsyncUpdater) takes a lock and can allocate: not allowed on a plugin's audio thread.
+static_assert(! std::is_base_of_v<juce::AsyncUpdater, amp::PluginNode>,
+              "plugin parameter notifications must not post messages from the notifying thread");
+
+TEST_CASE("plugin_host: a parameter change notified from another thread is allocation-free and reaches onEdited")
+{
+    Fixture f;
+    auto host = f.makeHost();
+    host->scan([](float) {});
+    const auto ref = amp::PluginHost::refFor(*findByName(host->available(), "FakeGain"));
+    juce::String error;
+    auto created = host->create(ref, spec, error);
+    REQUIRE(created != nullptr);
+    auto& node = dynamic_cast<amp::PluginNode&>(*created);
+    int edits = 0;
+    node.setOnEdited([&] { ++edits; });
+    auto* param = node.instance()->getParameters()[0];
+
+    amp::RtSafety::reset();
+    std::thread audio([&] {
+        const amp::RtSafety::ScopedNoAlloc guard; // as if the plugin reported from its audio thread
+        for (int i = 0; i < 100; ++i)
+            param->setValueNotifyingHost((float) (i % 10) / 10.0f);
+    });
+    audio.join();
+    CHECK(amp::RtSafety::violations() == 0);
+    CHECK(edits == 0); // delivered on the message thread, not inline
+
+    node.dispatchPendingEdit(); // what the message-thread poll does
+    CHECK(edits == 1);          // coalesced
+    node.dispatchPendingEdit();
+    CHECK(edits == 1); // nothing new
+
+    node.setOnEdited(nullptr);
+    param->setValueNotifyingHost(0.3f);
+    node.dispatchPendingEdit();
+    CHECK(edits == 1); // not listening any more
 }

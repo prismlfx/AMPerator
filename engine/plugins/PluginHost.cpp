@@ -108,20 +108,24 @@ void PluginNode::setOnEdited(std::function<void()> fn)
         plugin->addListener(this);
     else if (onEdited == nullptr && wasListening)
         plugin->removeListener(this);
-    cancelPendingUpdate();
+    edited.store(false, std::memory_order_relaxed);
+    if (onEdited != nullptr)
+        startTimer(editPollMs);
+    else
+        stopTimer();
+}
+
+void PluginNode::dispatchPendingEdit()
+{
+    if (edited.exchange(false, std::memory_order_relaxed) && onEdited)
+        onEdited();
 }
 
 void PluginNode::audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details)
 {
     // Latency or parameter-info updates are not edits; a program or non-parameter state change is.
     if (details.programChanged || details.nonParameterStateChanged)
-        triggerAsyncUpdate();
-}
-
-void PluginNode::handleAsyncUpdate()
-{
-    if (onEdited)
-        onEdited();
+        markEdited();
 }
 
 void PluginNode::prepare(const ProcessSpec& spec)
