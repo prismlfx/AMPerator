@@ -165,12 +165,14 @@ TEST_CASE("rig_loader: builds default rig with fixture assets")
     REQUIRE(live->report.placeholderNodeIds.isEmpty());
     REQUIRE(live->report.resolvedByFilename.isEmpty());
 
-    // Input/Output are not processor nodes: the plan is Gate -> NamAmp -> CabIR in chain order.
+    // Input is not a processor node: the plan is Gate -> NamAmp -> CabIR in chain order, then the Output node's
+    // master level.
     const auto& nodes = live->plan->nodes();
-    REQUIRE(nodes.size() == 3);
+    REQUIRE(nodes.size() == 4);
     REQUIRE(nodes[0]->id == gateDoc->id);
     REQUIRE(nodes[1]->id == ampDoc->id);
     REQUIRE(nodes[2]->id == cabDoc->id);
+    REQUIRE(nodes[3]->id == firstOfType(doc, amp::NodeType::Output)->id);
     for (const auto& pn : nodes)
         REQUIRE_FALSE(pn->bypass.load());
     REQUIRE(live->plan->spec().sampleRate == spec.sampleRate);
@@ -202,7 +204,7 @@ TEST_CASE("rig_loader: default rig without assets runs empty amp and cab")
     REQUIRE(live->report.missingAssets.isEmpty());
     REQUIRE(live->report.placeholderNodeIds.isEmpty());
     const auto& nodes = live->plan->nodes();
-    REQUIRE(nodes.size() == 3);
+    REQUIRE(nodes.size() == 4); // + the Output node's master level
     REQUIRE(dynamic_cast<amp::NamAmpNode*>(nodes[1]->node.get()) != nullptr);
     REQUIRE(dynamic_cast<amp::CabIRNode*>(nodes[2]->node.get()) != nullptr);
     for (const auto& pn : nodes)
@@ -502,4 +504,33 @@ TEST_CASE("rig_loader: hostile params from a rig file are clamped and the output
         }
     }
     engine.drainRetired();
+}
+
+TEST_CASE("rig_loader: the Output node's level is applied as the last plan node and captured")
+{
+    Fixture f;
+    auto doc = chainOf({ nodeOf(amp::NodeType::Gate, "gate") });
+    findDoc(doc, "out")->params.set("level", -6.0);
+    findDoc(doc, "gate")->bypass = true;
+    juce::String error;
+    auto live = f.loader->build(doc, spec, error);
+    REQUIRE(live.has_value());
+    const auto& nodes = live->plan->nodes();
+    REQUIRE(nodes.size() == 2);
+    REQUIRE(nodes.back()->id == "out");
+    REQUIRE_FALSE(nodes.back()->bypass.load());
+
+    juce::AudioBuffer<float> io(2, spec.maxBlock);
+    for (int b = 0; b < 4; ++b)
+    {
+        for (int i = 0; i < spec.maxBlock; ++i)
+            io.setSample(0, i, 0.5f);
+        live->plan->process(io, spec.maxBlock);
+    }
+    CHECK(std::abs(io.getSample(0, 10) - 0.5f * std::pow(10.0f, -6.0f / 20.0f)) < 1e-5f);
+
+    live->plan->find("out")->node->setParam("level", -3.0f);
+    const auto captured = f.loader->capture(*live);
+    CHECK(paramOf(findDoc(captured, "out")->params, "level") == -3.0f);
+    CHECK_FALSE(findDoc(captured, "out")->bypass);
 }

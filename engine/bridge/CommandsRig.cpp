@@ -278,8 +278,7 @@ CommandResult Engine::toggleBypass(const juce::String& id)
     const auto state = applyBypass(id, std::nullopt);
     if (! state)
         return CommandResult::failure("unknown or unloaded node: " + id);
-    bridge().emit("bypassChanged", json::object({ { "id", id }, { "bypass", *state } }));
-    setDirty(true);
+    bridge().emit("bypassChanged", json::object({ { "id", id }, { "bypass", *state } })); // not an edit: no rigDirty
     return CommandResult::success(json::object({ { "bypass", *state } }));
 }
 
@@ -297,6 +296,20 @@ CommandResult Engine::learnMapping(const juce::String& id)
 CommandResult Engine::cancelLearn()
 {
     mapping.cancelLearn();
+    return CommandResult::success();
+}
+
+CommandResult Engine::clearMapping(const juce::String& control)
+{
+    if (! live)
+        return CommandResult::failure("no rig loaded");
+    auto& maps = live->doc.mappings;
+    const auto removed = std::erase_if(maps, [&](const Mapping& m) { return m.control == control; });
+    if (removed == 0)
+        return CommandResult::failure("the rig has no mapping for " + control);
+    refreshMappings();
+    bridge().emit("mappingCleared", json::object({ { "control", control } }));
+    setDirty(true);
     return CommandResult::success();
 }
 

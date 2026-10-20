@@ -226,6 +226,65 @@ describe('pedalboard', () => {
   });
 });
 
+describe('minor fixes', () => {
+  it('a missing model offers Locate… which assigns a file from the library', async () => {
+    await started(makeRig(), { ...emptyReport, missingAssets: ['/m/Plexi.nam'], placeholderNodeIds: ['amp'] });
+    edit.renderEdit(root);
+    const locate = [...card('amp').querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Locate…')!;
+    expect(locate).toBeDefined();
+    locate.click();
+    expect(lastCommand()).toMatchObject({ cmd: 'listAssets', args: { kind: 'nam' } });
+    juce.reply(lastCommand().id, true, { assets: [{ file: '/new/Plexi.nam', name: 'Plexi', kind: 'nam', sha256: 'q' }] });
+    await flush();
+    [...document.querySelectorAll<HTMLButtonElement>('.asset-list button')].find((b) => b.textContent!.includes('Plexi'))!.click();
+    expect(lastCommand()).toMatchObject({ cmd: 'setAsset', args: { id: 'amp', file: '/new/Plexi.nam' } });
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    card('amp').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 5, clientY: 5 }));
+    expect(menuItem('Locate…')).toBeDefined();
+  });
+
+  it('the card menu clears a footswitch mapping', async () => {
+    await started();
+    edit.renderEdit(root);
+    card('g').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 5, clientY: 5 }));
+    menuItem('Clear footswitch L').click();
+    expect(lastCommand()).toMatchObject({ cmd: 'clearMapping', args: { control: 'footswitch:L' } });
+    juce.reply(lastCommand().id, true, {});
+    juce.fromBackend('amp', { v: 1, event: 'mappingCleared', data: { control: 'footswitch:L' } });
+    await flush();
+    expect(card('g').querySelector('.fs-label')).toBeNull();
+    expect(card('eq').querySelector('.fs-label')!.textContent).toContain('MIDI cc64');
+  });
+
+  it('learnCancelled closes the learn overlay', async () => {
+    await started();
+    edit.renderEdit(root);
+    unmountOverlay = edit.mountLearnOverlay(document.body);
+    card('g').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 5, clientY: 5 }));
+    menuItem('Learn footswitch').click();
+    juce.reply(lastCommand().id, true, {});
+    await flush();
+    expect(document.querySelector('.learn-overlay')).not.toBeNull();
+    juce.fromBackend('amp', { v: 1, event: 'learnCancelled', data: {} });
+    expect(document.querySelector('.learn-overlay')).toBeNull();
+  });
+
+  it('the master level knob sets the Output node level', async () => {
+    const rig = makeRig();
+    rig.nodes[5] = { id: 'out', type: 'Output', bypass: false, params: { level: -3 } } as any;
+    await started(rig);
+    edit.renderEdit(root);
+    const knob = root.querySelector<HTMLElement>('.master-level [role="slider"]')!;
+    expect(knob).not.toBeNull();
+    expect(knob.getAttribute('aria-valuenow')).toBe('-3');
+    knob.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); // reset to 0 dB
+    expect(lastCommand()).toMatchObject({ cmd: 'setParam', args: { id: 'out', name: 'level', value: 0 } });
+    juce.fromBackend('amp', { v: 1, event: 'paramChanged', data: { id: 'out', name: 'level', value: -9 } });
+    expect(knob.getAttribute('aria-valuenow')).toBe('-9');
+  });
+});
+
 describe('knob', () => {
   it('sends setParam throttled, always delivering the last value', async () => {
     vi.useFakeTimers();
@@ -319,5 +378,21 @@ describe('library', () => {
     const online = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent!.includes('Search online'))!;
     expect(online.disabled).toBe(true);
     expect(online.textContent).toContain('coming soon');
+  });
+
+  it('deleting a rig asks first, then calls deleteRig', async () => {
+    await started();
+    library.renderLibrary(root);
+    juce.reply(juce.commands().find((c) => c.cmd === 'listRigs')!.id, true, {
+      rigs: [{ id: 'a', name: 'Plush', band: 'STP', favorite: false }],
+      bands: ['STP'],
+    });
+    await flush();
+    root.querySelector<HTMLButtonElement>('.band-group .rig-delete')!.click();
+    expect(document.querySelector('.modal')!.textContent).toContain('Plush');
+    expect(juce.commands().some((c) => c.cmd === 'deleteRig')).toBe(false);
+    [...document.querySelectorAll<HTMLButtonElement>('.modal button')].find((b) => b.textContent === 'Move to Trash')!.click();
+    await flush();
+    expect(lastCommand()).toMatchObject({ cmd: 'deleteRig', args: { id: 'a' } });
   });
 });

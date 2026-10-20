@@ -34,6 +34,8 @@ public:
     bool isLearning() const { return learnNode.has_value(); }
 
     std::function<void(const Mapping&)> onLearned; // caller writes the mapping into the rig doc
+    /** setValidNodes() disarmed an armed learn because its node went away (not called by cancelLearn()). */
+    std::function<void()> onLearnCancelled;
     std::function<void(const juce::String& node, bool bypass)> onBypassChanged;
 
     /** Rig mappings (insertion order) then non-overridden global ones, minus those whose node is invalid. */

@@ -21,7 +21,11 @@ void MappingEngine::setValidNodes(juce::StringArray ids)
 {
     validNodes = std::move(ids);
     if (learnNode && !validNodes.contains(*learnNode))
+    {
         learnNode.reset(); // armed node was deleted: disarm
+        if (onLearnCancelled)
+            onLearnCancelled();
+    }
 }
 
 void MappingEngine::beginLearn(const juce::String& nodeId)

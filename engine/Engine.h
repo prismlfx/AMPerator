@@ -143,6 +143,8 @@ public:
     CommandResult setAsset(const juce::String& id, const juce::String& file);
     CommandResult learnMapping(const juce::String& id);
     CommandResult cancelLearn();
+    /** Removes the current rig's mapping of `control` (global mappings stay) -> mappingCleared, rigDirty. */
+    CommandResult clearMapping(const juce::String& control);
     /** control = footswitch:L|M|R. The next HID key pressed becomes that control's key (replacing its previous key);
         the press itself does not trigger anything. Persists settings and emits controlStatus. */
     CommandResult assignFootswitchKey(const juce::String& control);

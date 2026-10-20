@@ -9,6 +9,7 @@ import {
   dismissStartupError,
   initStore,
   onToastableError,
+  reportSummary,
   rigSaved,
   setRenamePending,
   setView,
@@ -138,6 +139,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 let connectionError = '';
+let dismissedReport = ''; // the load report whose banner the user closed
 
 function render(s: AppState) {
   syncRigFields(s);
@@ -160,6 +162,15 @@ function renderBanners(s: AppState) {
   if (connectionError) items.push(banner(`Couldn't reach the engine: ${connectionError}`));
   if (s.deviceStatus.status === 'Disconnected')
     items.push(banner('The audio device was disconnected. Output is silent until it comes back.'));
+  const summary = reportSummary(s.report);
+  const reportKey = JSON.stringify([s.rig?.id, s.report]);
+  if (summary && reportKey !== dismissedReport)
+    items.push(
+      banner(summary, () => {
+        dismissedReport = reportKey;
+        render(store.get());
+      }),
+    );
   s.startupErrors.forEach((e, i) => {
     const dismiss = () => dismissStartupError(i);
     if (e.context === 'loadRig' && e.rigId) {

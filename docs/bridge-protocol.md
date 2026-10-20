@@ -63,6 +63,10 @@ variable `AMP_UI_DEV=1` a Debug build of the app loads the Vite dev server at `h
   empty id means "guess from the node's type and name").
 - `params` hold the live values (every parameter the node exposes), `bypass` the live state, `state` the plugin state
   (base64) as of the last capture.
+- The **Output** node's `params.level` (dB, -60..12, default 0) is the master volume: `setParam{id: <Output id>, name:
+  "level"}`; it is applied after the chain and is never bypassed.
+- After a load with a non-empty report the UI shows a banner listing the missing assets/plugins and the files matched by
+  file name; placeholder NamAmp/CabIR nodes offer "Locate…" (asset picker → `setAsset`).
 
 **Report** (`report`): `{missingAssets: [file], missingPlugins: [name], placeholderNodeIds: [id], resolvedByFilename: [path]}`.
 Placeholder nodes keep all their data but run as bypassed passthroughs; `toggleBypass`/`setParam` on them reply
@@ -94,16 +98,17 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `loadRig` | `id` | `{id}` | `rigLoaded`, `rigDirty{false}` if it was dirty. Corrupt / unreadable rig → `ok:false` with the parse error (file untouched; offer `restoreBackup`). Unsaved changes of the current rig are discarded (UI confirms using `dirty`). |
 | `newRig` | `name?` (default `"New Rig"`), `band?` (default `"My Tones"`) | `{id}` | Default chain In → Gate → NamAmp → CabIR → Out; **unsaved** until `saveRig` (`saved:false`). `rigLoaded`. |
 | `saveRig` | `name?`, `band?`, `asNew?` (bool) | `{id, name, band}` | Captures live params/bypass/plugin state, writes atomically (keeps 5 `.bak`). Becomes the last rig. `rigDirty{false}` (always). A non-blank `name` / `band` (trimmed) renames the rig / moves it to that band's folder first (same id; backups move with it, and the version saved under the old name becomes `.bak.1`); blank or absent keeps the current value. The result carries the saved name and band (no `rigLoaded`). **`asNew: true`** ("Save as…"): writes a copy under a fresh id (file name made unique), leaves the original file untouched, keeps the nodes' user images, and makes the copy the current rig → `rigLoaded` (new `id`, `saved:true`), then `rigDirty{false}`. |
-| `deleteRig` | `id` | `{}` | Removes the file and its backups, drops it from favorites/recents. If it was the current rig, the rig now at its list position (else a new default rig) is loaded → `rigLoaded`. |
+| `deleteRig` | `id` | `{}` | Moves the file and its backups to the system Trash (`juce::File::moveToTrash`), drops it from favorites/recents. If it was the current rig, the rig now at its list position (else a new default rig) is loaded → `rigLoaded`. |
 | `nextRig` / `prevRig` | — | `{id}` | Walks `listRigs` order with wrap-around. An unsaved current rig counts as "before the first": next → first, prev → last. No saved rigs → `ok:false`. |
 | `addNode` | `type` (`Gate`,`EQ`,`NamAmp`,`CabIR`,`Plugin`), `index` (chain position among non-I/O nodes, clamped), `plugin?` (PluginRef from `listPlugins`, or its `uid`; required for `Plugin`), `asset?` (absolute path from `listAssets`, NamAmp/CabIR only) | `{id}` | Structural edit: rebuild + crossfaded swap. `rigLoaded`, `rigDirty{true}`. |
 | `moveNode` | `id`, `index` | `{}` | Structural. `rigLoaded`, `rigDirty`. |
 | `removeNode` | `id` | `{}` | Structural; also removes the rig's mappings to that node. `rigLoaded`, `rigDirty`. |
 | `setAsset` | `id`, `file` (absolute path from `listAssets`; `""` clears) | `{}` | NamAmp (`.nam`) / CabIR (IR) nodes. File must be in the asset library. Structural. |
 | `setParam` | `id`, `name`, `value` (number) | `{value}` (value the node stored, after clamping to the documented range: Gate `threshold` -90..0 dB, `release` 5..1000 ms; EQ `low`/`mid`/`high` -12..12 dB, `midFreq` 200..5000 Hz; NamAmp `inputGain`/`outputGain` -24..24 dB, `normalize` 0/1; CabIR `lowCut` 20..500 Hz, `highCut` 1000..20000 Hz, `level` -24..12 dB — `engine/dsp/ParamRanges.h`; rig files are clamped the same way) | Live, no rebuild. `paramChanged`, `rigDirty{true}`. Unknown parameter → `ok:false`. Plugin parameters are edited in the plugin's own editor; a parameter, program or state change the plugin reports there marks the rig dirty (`rigDirty{true}`). |
-| `toggleBypass` | `id` | `{bypass}` | Live. `bypassChanged`, `rigDirty{true}`. The audio crossfades over ~10 ms (no click); a node switched back on starts from a clean state (filter / convolution / model history cleared) instead of replaying what it held when it was bypassed. |
+| `toggleBypass` | `id` | `{bypass}` | Live. `bypassChanged` — **not** `rigDirty`: bypass is a performance state (footswitch presses toggle it too), so stomping never makes the rig "unsaved"; `saveRig` still stores the current bypass states. The Output node cannot be bypassed (`ok:false`). The audio crossfades over ~10 ms (no click); a node switched back on starts from a clean state (filter / convolution / model history cleared) instead of replaying what it held when it was bypassed. |
 | `learnMapping` | `id` | `{}` | Cancels any armed learn, then arms learn (unknown/unmappable node → `ok:false`): the next control press maps to `toggleBypass(id)` in the current rig (replacing that control's mapping) → `learned`, `rigDirty{true}`. Loading another rig cancels learn. |
 | `cancelLearn` | — | `{}` | |
+| `clearMapping` | `control` | `{}` | Removes the current rig's mapping of that control (global mappings in Settings stay) → `mappingCleared{control}`, `rigDirty{true}`. No rig mapping for it → `ok:false`. |
 | `assignFootswitchKey` | `{control}` (`footswitch:L`/`M`/`R`) | `{}` | The next HID key pressed becomes that control's key (replacing the control's previous key and taking the key from any other control); that press does not trigger a control. Saved to `settings.footswitchKeys`, applied immediately, `controlStatus` emitted with `assigning:null` and the new `lastKey`. |
 | `cancelAssignFootswitchKey` | — | `{}` | Aborts a pending assign (`controlStatus.assigning` → null). |
 | `listAssets` | `kind` (`"nam"`\|`"ir"`) | `{assets: [Asset]}` | From `Models/`, `IRs/` and watched folders, rescanned on every call (hashes are cached), so files dropped in while the app runs appear at once. `loadRig`, `newRig`, `addNode` with an asset and `setAsset` rescan before resolving too. |
@@ -127,7 +132,7 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 |---|---|---|
 | `rigLoaded` | `{rig, report, saved}` | A rig was loaded/created, or a structural edit rebuilt it. |
 | `rigDirty` | `{dirty}` | Dirty state changed; always after `saveRig`. |
-| `bypassChanged` | `{id, bypass}` | `toggleBypass` or a mapped control press. |
+| `bypassChanged` | `{id, bypass}` | `toggleBypass` or a mapped control press (never followed by `rigDirty`). |
 | `paramChanged` | `{id, name, value}` | After `setParam`. |
 | `meter` | `{inDb, outDb}` | 30 Hz while audio is enabled; peak dBFS since the previous event, floor -100. |
 | `tuner` | `{active, hz, note, octave, cents}` | 20 Hz while the tuner is on. `active:false` (hz 0, note `""`) when no stable pitch. |
@@ -135,5 +140,7 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `controlStatus` | ControlStatus | On change (polled every 1 s while controls run). |
 | `controlEvent` | `{control, pressed}` | Every footswitch/MIDI edge (`footswitch:L`, `midi:<device>:cc<n>`, ...). |
 | `learned` | `{control, node}` | A learn completed. |
+| `learnCancelled` | `{}` | An armed learn was dropped because its node went away (e.g. `removeNode`); hide the "press a footswitch" overlay. |
+| `mappingCleared` | `{control}` | After `clearMapping`. |
 | `quitRequested` | `{rigName}` | The app is quitting (Cmd-Q / window close) and the rig has unsaved changes. Show Save / Discard / Cancel and answer with `confirmQuit`. If no answer arrives within ~5 s the app asks with a native dialog instead. A clean rig quits without this event. |
 | `error` | `{message, context}` | Asynchronous problems (`context`: `audioDevice`, `audioPermission` (microphone access denied; also listed in `startupErrors`), `pluginBlacklisted` (+ `pluginId`; also in `startupErrors`), `deviceRestart`, `swapPlan`, `settings`). Command failures are replies, not events. Errors raised before the UI set `send` (startup) are queued and delivered ahead of the first reply/event. |

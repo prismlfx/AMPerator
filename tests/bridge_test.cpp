@@ -264,7 +264,8 @@ TEST_CASE("bridge: toggleBypass emits bypassChanged")
     auto e = f.lastEvent("bypassChanged");
     CHECK(e["id"].toString() == gate);
     CHECK(static_cast<bool>(e["bypass"]));
-    CHECK(static_cast<bool>(f.lastEvent("rigDirty")["dirty"]));
+    CHECK(f.events("rigDirty").empty()); // bypass is a performance state, not an edit
+    CHECK_FALSE(static_cast<bool>(f.state()["dirty"]));
 
     f.ok("toggleBypass", obj({ { "id", gate } }));
     CHECK_FALSE(static_cast<bool>(f.lastEvent("bypassChanged")["bypass"]));
@@ -1043,4 +1044,92 @@ TEST_CASE("bridge: the footswitch device can be picked manually and is persisted
     r = f.ok("setSettings", obj({ { "footswitchDevice", juce::var() } }));
     CHECK(r["footswitchDevice"].isVoid());
     CHECK_FALSE(Settings::load(f.data.getChildFile("settings.json")).footswitchDevice.has_value());
+}
+
+TEST_CASE("bridge: stomping pedals never marks the rig dirty, but an explicit save keeps the bypass state")
+{
+    Fixture f;
+    const auto id = f.ok("newRig", obj({ { "name", "Live" } }))["id"].toString();
+    f.ok("saveRig");
+    const auto gate = f.nodeOfType("Gate");
+    f.ok("learnMapping", obj({ { "id", gate } }));
+    f.engine->injectControl({ "footswitch:L", true }); // learned: an edit
+    f.ok("saveRig");
+    REQUIRE_FALSE(static_cast<bool>(f.state()["dirty"]));
+
+    f.sent.clear();
+    f.engine->injectControl({ "footswitch:L", true });
+    CHECK(static_cast<bool>(f.lastEvent("bypassChanged")["bypass"]));
+    CHECK(f.events("rigDirty").empty());
+    CHECK_FALSE(static_cast<bool>(f.state()["dirty"]));
+    CHECK(f.engine->requestQuit()); // nothing to ask about
+
+    f.ok("saveRig");
+    for (auto& n : RigStore(f.lib).load(id).rig->nodes)
+        if (n.id == gate)
+            CHECK(n.bypass);
+}
+
+TEST_CASE("bridge: clearMapping removes the rig's mapping of a control")
+{
+    Fixture f;
+    const auto gate = f.nodeOfType("Gate");
+    f.ok("learnMapping", obj({ { "id", gate } }));
+    f.engine->injectControl({ "footswitch:M", true });
+    f.ok("saveRig");
+    REQUIRE(f.state()["rig"]["mappings"].size() == 1);
+
+    f.ok("clearMapping", obj({ { "control", "footswitch:M" } }));
+    CHECK(f.lastEvent("mappingCleared")["control"].toString() == "footswitch:M");
+    CHECK(f.state()["rig"]["mappings"].size() == 0);
+    CHECK(static_cast<bool>(f.state()["dirty"]));
+    f.sent.clear();
+    f.engine->injectControl({ "footswitch:M", true }); // no longer does anything
+    CHECK(f.events("bypassChanged").empty());
+    CHECK_FALSE(static_cast<bool>(f.call("clearMapping", obj({ { "control", "footswitch:M" } }))["ok"]));
+}
+
+TEST_CASE("bridge: removing the node an armed learn waits for emits learnCancelled")
+{
+    Fixture f;
+    const auto gate = f.nodeOfType("Gate");
+    f.ok("learnMapping", obj({ { "id", gate } }));
+    f.ok("removeNode", obj({ { "id", gate } }));
+    CHECK(f.events("learnCancelled").size() == 1);
+    CHECK_FALSE(static_cast<bool>(f.state()["learning"]));
+}
+
+TEST_CASE("bridge: opening the device at the plan's rate with a smaller buffer does not rebuild the rig")
+{
+    Fixture f;
+    saveFakeSoloSettings(f); // 48 kHz, 128 samples; the startup plan is 48 kHz / 512
+    f.start(true, true);
+    int rebuilds = 0;
+    f.engine->beforeNodesReplaced = [&](bool) { ++rebuilds; };
+    f.engine->startAudio(true);
+    CHECK(f.state()["deviceStatus"]["status"].toString() == "Running");
+    CHECK(rebuilds == 0);
+    f.ok("setSettings", obj({ { "sampleRate", 44100.0 } })); // another rate still rebuilds
+    CHECK(rebuilds == 1);
+    f.engine->beforeNodesReplaced = nullptr;
+}
+
+TEST_CASE("bridge: the Output node's level is the master volume")
+{
+    Fixture f;
+    const auto id = f.ok("newRig", obj({ { "name", "Master" } }))["id"].toString();
+    const auto out = f.nodeOfType("Output");
+    auto r = f.ok("setParam", obj({ { "id", out }, { "name", "level" }, { "value", -6.0 } }));
+    CHECK(static_cast<double>(r["value"]) == -6.0);
+    CHECK(static_cast<double>(f.ok("setParam", obj({ { "id", out }, { "name", "level" }, { "value", 50.0 } }))["value"]) == 12.0);
+    f.ok("setParam", obj({ { "id", out }, { "name", "level" }, { "value", -6.0 } }));
+    CHECK_FALSE(static_cast<bool>(f.call("toggleBypass", obj({ { "id", out } }))["ok"])); // never bypassed
+
+    for (auto& n : *f.state()["rig"]["nodes"].getArray())
+        if (n["id"].toString() == out)
+            CHECK(static_cast<double>(n["params"]["level"]) == -6.0);
+    f.ok("saveRig");
+    for (auto& n : RigStore(f.lib).load(id).rig->nodes)
+        if (n.id == out)
+            CHECK(static_cast<double>(n.params["level"]) == -6.0);
 }

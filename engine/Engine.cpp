@@ -97,9 +97,10 @@ Engine::Engine(Options o)
 
     mapping.onBypassChanged = [this](const juce::String& node, bool bypass)
     {
+        // Bypass is a performance state: stomping pedals is not an edit (the state is still saved by saveRig).
         bridge().emit("bypassChanged", json::object({ { "id", node }, { "bypass", bypass } }));
-        setDirty(true);
     };
+    mapping.onLearnCancelled = [this] { bridge().emit("learnCancelled", json::object()); };
     mapping.onLearned = [this](const Mapping& m)
     {
         if (live)
@@ -262,9 +263,9 @@ CommandResult Engine::structuralEdit(const std::function<juce::String(RigDocumen
 void Engine::rebuildForDevice(double sampleRate, int bufferSize)
 {
     spec = { sampleRate, bufferSize };
-    // Same rate and block size: the running plan survived the restart (RealtimeEngine only drops plans of another
-    // rate), so don't reinstantiate every node.
-    if (! live || (juce::exactlyEqual(live->plan->spec().sampleRate, sampleRate) && live->plan->spec().maxBlock == bufferSize))
+    // Same rate and a buffer the plan can take: the running plan survived the restart (RealtimeEngine only drops plans
+    // of another rate and feeds a plan blocks of at most its maxBlock), so don't reinstantiate every node.
+    if (! live || (juce::exactlyEqual(live->plan->spec().sampleRate, sampleRate) && bufferSize <= live->plan->spec().maxBlock))
         return;
     juce::String error;
     auto built = loader->build(currentDoc(), spec, error);
@@ -405,6 +406,8 @@ std::optional<bool> Engine::applyBypass(const juce::String& id, std::optional<bo
 {
     if (isPlaceholder(id)) // runs as a bypassed passthrough until its asset/plugin is available
         return std::nullopt;
+    if (const auto* n = findDocNode(id); n != nullptr && n->type == NodeType::Output)
+        return std::nullopt; // the master level is never bypassed
     const auto current = realtime.getBypass(id);
     if (! current)
         return std::nullopt;

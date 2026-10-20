@@ -176,6 +176,16 @@ export function dismissStartupError(index: number) {
   update({ startupErrors: current.startupErrors.filter((_, i) => i !== index) });
 }
 
+/** One line for the banner shown after a rig load that could not find everything (spec §5/§8), or null. */
+export function reportSummary(r: LoadReport): string | null {
+  const missing = [...r.missingAssets, ...r.missingPlugins].map((m) => m.split(/[\\/]/).pop() ?? m);
+  const byName = r.resolvedByFilename.map((f) => f.split(/[\\/]/).pop() ?? f);
+  const parts: string[] = [];
+  if (missing.length > 0) parts.push(`Missing: ${missing.join(', ')} — those parts are bypassed and keep their settings.`);
+  if (byName.length > 0) parts.push(`${byName.join(', ')} matched by file name (the file changed since the rig was saved).`);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
 /** Calls `fn` for engine `error` events that should be shown as a toast: not those delivered before getState
     answered (startup errors, shown as banners from getState), not repeats of a startup banner, and not a late
     `audioPermission` error (microphone access is answered after start-up), which becomes a banner itself. */
@@ -203,6 +213,11 @@ export async function initStore(): Promise<void> {
     on('bypassChanged', (d) => updateNode(d.id, (n) => ({ ...n, bypass: d.bypass })));
     on('paramChanged', (d) => updateNode(d.id, (n) => ({ ...n, params: { ...n.params, [d.name]: d.value } })));
     on('deviceStatus', (d) => update({ deviceStatus: d }));
+    on('learnCancelled', () => update({ learning: false, learnNode: '' }));
+    on('mappingCleared', (d) => {
+      const rig = current.rig;
+      if (rig) update({ rig: { ...rig, mappings: (rig.mappings ?? []).filter((m) => m.control !== d.control) } });
+    });
     on('controlStatus', (d) => update({ controlStatus: d }));
     on('learned', (d) => {
       // The control now toggles d.node in this rig, replacing whatever it mapped before.

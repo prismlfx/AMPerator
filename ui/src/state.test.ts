@@ -182,3 +182,18 @@ describe('rigSaved', () => {
     expect(ask).toHaveBeenCalledOnce();
   });
 });
+
+describe('load report', () => {
+  it('summarises missing assets and plugins and files matched by name', async () => {
+    expect(state.reportSummary({ missingAssets: [], missingPlugins: [], placeholderNodeIds: [], resolvedByFilename: [] })).toBeNull();
+    const text = state.reportSummary({
+      missingAssets: ['Plexi.nam'],
+      missingPlugins: ['Space Echo'],
+      placeholderNodeIds: ['a', 'b'],
+      resolvedByFilename: ['/x/4x12.wav'],
+    })!;
+    expect(text).toContain('Missing: Plexi.nam, Space Echo');
+    expect(text).toContain('4x12.wav');
+    expect(text).toContain('matched by file name');
+  });
+});

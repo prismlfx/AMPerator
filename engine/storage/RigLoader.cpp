@@ -158,6 +158,19 @@ std::optional<LiveRig> RigLoader::build(const RigDocument& doc, const ProcessSpe
         planNodes.push_back(std::move(pn));
     }
 
+    // Master volume: the Output node's `level`, always the last plan node and never bypassed.
+    {
+        const NodeDoc& out = *findNode(doc, order.back());
+        jassert(out.type == NodeType::Output);
+        auto pn = std::make_shared<PlanNode>();
+        pn->id = out.id;
+        pn->node = makeOutputGain();
+        for (const auto& p : out.params)
+            pn->node->setParam(p.name.toString(), static_cast<float>(static_cast<double>(p.value)));
+        pn->node->prepare(spec);
+        planNodes.push_back(std::move(pn));
+    }
+
     live.plan = std::make_shared<ProcessingPlan>(std::move(planNodes), spec);
     return live;
 }
@@ -167,13 +180,14 @@ RigDocument RigLoader::capture(const LiveRig& live) const
     RigDocument doc = live.doc;
     for (auto& n : doc.nodes)
     {
-        if (n.type == NodeType::Input || n.type == NodeType::Output || live.report.placeholderNodeIds.contains(n.id))
+        if (n.type == NodeType::Input || live.report.placeholderNodeIds.contains(n.id))
             continue;
         auto* pn = live.plan->find(n.id);
         if (pn == nullptr)
             continue;
 
-        n.bypass = pn->bypass.load();
+        if (n.type != NodeType::Output) // the master level is never bypassed
+            n.bypass = pn->bypass.load();
         for (const auto& p : pn->node->getParams())
             n.params.set(p.name, p.value);
         if (n.type == NodeType::Plugin)

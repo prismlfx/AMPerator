@@ -2,7 +2,7 @@
 // Models / IRs / Plugins lists. "Search online" is a placeholder tab (sub-project 3).
 
 import { call } from '../bridge';
-import { el, toast } from '../dialog';
+import { confirmDialog, el, toast } from '../dialog';
 import { confirmDiscardIfDirty, setView, store, type AppState } from '../state';
 
 interface RigEntry {
@@ -159,7 +159,17 @@ export function renderLibrary(root: HTMLElement): void {
         toast((e as Error).message);
       }
     });
-    return el('li', { class: `rig-row${current ? ' current' : ''}` }, load, showBand ? el('span', { class: 'muted rig-band' }, r.band) : '', star);
+    const del = el('button', { class: 'icon-button rig-delete', 'aria-label': `Delete ${r.name}`, title: 'Delete (moves the file to the Trash)' }, 'Delete');
+    del.addEventListener('click', async () => {
+      if (!(await confirmDialog(`Delete “${r.name}”? The rig file and its backups go to the Trash.`, 'Move to Trash'))) return;
+      try {
+        await call('deleteRig', { id: r.id });
+        await refreshRigs();
+      } catch (e) {
+        toast((e as Error).message);
+      }
+    });
+    return el('li', { class: `rig-row${current ? ' current' : ''}` }, load, showBand ? el('span', { class: 'muted rig-band' }, r.band) : '', star, del);
   }
 
   function renderRigs() {

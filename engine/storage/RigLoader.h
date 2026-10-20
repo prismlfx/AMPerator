@@ -28,7 +28,8 @@ struct LiveRig
 };
 
 // Turns a RigDocument into a prepared ProcessingPlan and captures live state back into a document.
-// The plan holds the nodes between Input and Output in chain order (Input/Output are not processor nodes).
+// The plan holds the nodes between Input and Output in chain order, then the Output node's master level (an output
+// gain with the Output node's id and `level` param, never bypassed). Input is not a processor node.
 // Gate/EQ are built-ins; NamAmp/CabIR load their asset (resolved through the AssetIndex) or run with none
 // when the node has no asset; Plugin nodes are created through the PluginHost. Anything that cannot be
 // loaded (missing/unloadable asset, missing plugin, unknown node type) becomes a passthrough placeholder

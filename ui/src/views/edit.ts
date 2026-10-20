@@ -1,6 +1,8 @@
 // Edit view (pedalboard): the rig's nodes as pedal / amp / cab cards in signal order (Input and Output are not
 // shown). Click a card to show its knobs, drag to reorder, + to add, right-click or ⋯ for the card menu
-// (footswitch learn, art, plugin editor, remove). Placeholder (missing) nodes are drawn bypassed, without knobs.
+// (footswitch learn / clear, art, plugin editor, remove). Placeholder (missing) nodes are drawn bypassed, without knobs;
+// a missing model or IR offers Locate… (pick the file from the library). Below the board: the master level (the
+// Output node's `level`).
 
 import { call } from '../bridge';
 import { createKnob, throttle, type Knob } from '../components/knob';
@@ -21,6 +23,7 @@ export interface ParamSpec {
 
 /** Knobs per node type: engine parameter names (engine/dsp), ranges, units and the engine's defaults. */
 export const PARAMS: Record<string, ParamSpec[]> = {
+  Output: [{ name: 'level', label: 'Master', min: -60, max: 12, defaultValue: 0, unit: 'dB' }],
   Gate: [
     { name: 'threshold', label: 'Threshold', min: -90, max: 0, defaultValue: -55, unit: 'dB' },
     { name: 'release', label: 'Release', min: 5, max: 1000, defaultValue: 100, unit: 'ms' },
@@ -101,7 +104,8 @@ export function renderEdit(root: HTMLElement): void {
   disposers.get(root)?.();
 
   const board = el('div', { class: 'pedalboard', role: 'list', 'aria-label': 'Signal chain' });
-  root.replaceChildren(el('div', { class: 'edit-view' }, board));
+  const master = el('div', { class: 'master-level', 'aria-label': 'Master level' });
+  root.replaceChildren(el('div', { class: 'edit-view' }, board, master));
 
   let key = '';
   let knobs = new Map<string, Knob>(); // `${nodeId}/${param}`
@@ -130,6 +134,7 @@ export function renderEdit(root: HTMLElement): void {
     knobs = new Map();
     toggles = new Map();
     cards = new Map();
+    master.replaceChildren();
     if (!s.connected) {
       board.replaceChildren(el('p', { class: 'muted center' }, 'Connecting to the engine…'));
       return;
@@ -138,6 +143,8 @@ export function renderEdit(root: HTMLElement): void {
       board.replaceChildren(el('p', { class: 'muted center' }, 'No rig loaded. Open the library to load or create one.'));
       return;
     }
+    const output = s.rig.nodes.find((n) => n.type === 'Output');
+    if (output) master.append(el('span', { class: 'master-label' }, 'Output'), buildKnobs(output, PARAMS.Output));
     const chain = s.rig.nodes.filter(isChainNode);
     const add = el('button', { class: 'card card-add', 'aria-label': 'Add to the chain', title: 'Add a pedal, amp, cab or plugin' }, '+');
     add.addEventListener('click', () => {
@@ -150,9 +157,10 @@ export function renderEdit(root: HTMLElement): void {
   function updateLive(s: AppState) {
     for (const n of s.rig?.nodes ?? []) {
       const card = cards.get(n.id);
-      if (!card) continue;
-      card.classList.toggle('off', n.bypass);
-      card.querySelector('.led')?.setAttribute('aria-pressed', String(!n.bypass));
+      if (card) {
+        card.classList.toggle('off', n.bypass);
+        card.querySelector('.led')?.setAttribute('aria-pressed', String(!n.bypass));
+      }
       for (const spec of PARAMS[n.type] ?? []) {
         const v = n.params?.[spec.name];
         if (typeof v !== 'number') continue;
@@ -197,6 +205,11 @@ export function renderEdit(root: HTMLElement): void {
     if (placeholder) {
       const original = plugin(n)?.name || (assetFile(n) ? baseName(assetFile(n)) : n.type);
       parts.push(el('span', { class: 'badge-missing' }, 'missing'), el('div', { class: 'card-sub', title: assetFile(n) || original }, original));
+      if (assetKind(n.type)) {
+        const locate = el('button', { class: 'asset-button', title: 'Find the file in the library' }, 'Locate…');
+        locate.addEventListener('click', () => void pickAsset(n.id, assetKind(n.type) as 'nam' | 'ir'));
+        parts.push(locate);
+      }
     } else if (assetKind(n.type)) {
       const file = assetFile(n);
       const pick = el(
@@ -242,14 +255,19 @@ export function renderEdit(root: HTMLElement): void {
   }
 
   function buildControls(n: RigNode): HTMLElement {
-    const box = el('div', { class: 'card-controls' });
     if (n.type === 'Plugin') {
+      const box = el('div', { class: 'card-controls' });
       const open = el('button', { class: 'button small' }, 'Open editor');
       open.addEventListener('click', () => call('openPluginEditor', { id: n.id }).catch(showError));
       box.append(open);
       return box;
     }
-    for (const spec of PARAMS[n.type] ?? []) {
+    return buildKnobs(n, PARAMS[n.type] ?? []);
+  }
+
+  function buildKnobs(n: RigNode, specs: ParamSpec[]): HTMLElement {
+    const box = el('div', { class: 'card-controls' });
+    for (const spec of specs) {
       const current = typeof n.params?.[spec.name] === 'number' ? n.params[spec.name] : spec.defaultValue;
       const gen = generation;
       // Dropped once the cards were rebuilt (another rig, a structural edit): the node may no longer exist. A reply
@@ -352,10 +370,17 @@ export function renderEdit(root: HTMLElement): void {
     const items: MenuItem[] = [];
     if (!placeholder && assetKind(n.type))
       items.push({ label: n.type === 'NamAmp' ? 'Choose model…' : 'Choose IR…', run: () => void pickAsset(n.id, assetKind(n.type) as 'nam' | 'ir') });
+    if (placeholder && assetKind(n.type))
+      items.push({ label: 'Locate…', run: () => void pickAsset(n.id, assetKind(n.type) as 'nam' | 'ir') });
     if (!placeholder && n.type === 'Plugin')
       items.push({ label: 'Open editor', run: () => call('openPluginEditor', { id: n.id }).catch(showError) });
+    const mapped = (store.get().rig?.mappings ?? []).filter((m) => m.node === n.id);
     items.push(
       { label: 'Learn footswitch', run: () => void learn(n.id) },
+      ...mapped.map((m) => ({
+        label: `Clear footswitch ${controlLabel(m.control)}`,
+        run: () => void call('clearMapping', { control: m.control }).catch(showError),
+      })),
       { label: 'Set art…', run: () => openArtDialog(n, nodeTitle(n)) },
       'separator',
       { label: 'Remove', danger: true, run: () => call('removeNode', { id: n.id }).catch(showError) },

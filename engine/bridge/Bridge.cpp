@@ -230,6 +230,7 @@ const std::map<juce::String, Handler>& commands()
         { "assignFootswitchKey", [](Engine& e, const juce::var& a) { return e.assignFootswitchKey(nonEmpty(a, "control")); } },
         { "cancelAssignFootswitchKey", [](Engine& e, const juce::var&) { return e.cancelAssignFootswitchKey(); } },
         { "cancelLearn", [](Engine& e, const juce::var&) { return e.cancelLearn(); } },
+        { "clearMapping", [](Engine& e, const juce::var& a) { return e.clearMapping(nonEmpty(a, "control")); } },
         { "listAssets", [](Engine& e, const juce::var& a) { return e.listAssets(str(a, "kind")); } },
         { "listPlugins", [](Engine& e, const juce::var&) { return e.listPlugins(); } },
         { "rescanPlugins", [](Engine& e, const juce::var&) { return e.rescanPlugins(); } },

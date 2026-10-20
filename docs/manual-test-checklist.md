@@ -38,18 +38,24 @@ Legend: `[x]` = verified by the automated/headless run (evidence given); `[ ]` =
 ## Rigs & files
 
 - [ ] A rig opens, and after quit and relaunch it sounds the same (same models, IRs, knob values, bypass states).
-- [ ] A rig that references a missing model/IR opens without crashing and shows the missing item.
+- [ ] A rig that references a missing model/IR opens without crashing, shows the missing item in a banner, and "Locate…" on the card fixes it.
+- [ ] Quitting (⌘Q or the window's close button) with unsaved changes asks Save / Discard / Cancel; with no changes it quits at once.
+- [ ] Stomping a footswitch does not make the rig "unsaved" (no dot, no prompt on Next/Prev).
+- [ ] A `.nam` dropped into `Models/` while the app runs shows up in the model picker without a relaunch.
 
 ## Plugins
 
 - [ ] A rig whose VST3 is not installed opens with a placeholder in that slot (rest of the chain still plays).
 - [ ] A VST3 editor opens, closes, and reopens; quitting with an editor open is clean (no crash dialog on quit or next launch).
-- [ ] Plugin crash is blacklisted on relaunch. Only if you own a plugin known to crash; otherwise skip: ______
+- [ ] Plugin crash is blacklisted on relaunch, with a banner and a Retry (also under Settings → Disabled plugins). Only if you own a plugin known to crash; otherwise skip: ______
+- [ ] Turning a knob in a plugin's own editor marks the rig unsaved.
 
 ## Robustness
 
 - [ ] Quitting while audio is running exits cleanly (no crash report).
 - [ ] Changing the audio device or sample rate while playing recovers without a restart.
+- [ ] Launch with the Scarlett unplugged: another device plays; Settings still show the Scarlett ("not connected"); plugging it in switches back to it with the same channels.
+- [ ] Bypass toggles (footswitch and the card LED) switch without a click.
 
 ## Results
 
