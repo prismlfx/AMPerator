@@ -46,10 +46,11 @@ struct Fixture
         dir.deleteRecursively();
     }
 
-    void start(bool withFakeDevice = false)
+    void start(bool withFakeDevice = false, bool deferAudio = false)
     {
         engine.reset();
         Engine::Options o;
+        o.deferAudioStart = deferAudio;
         o.libraryRoot = lib;
         o.dataDir = data;
         o.startAudio = withFakeDevice;
@@ -541,4 +542,49 @@ TEST_CASE("bridge: device restart rebuilds the plan at the new sample rate")
     CHECK(f.engine->planSpec().maxBlock == 256);
     CHECK(f.events("error").empty());
     CHECK(Settings::load(f.data.getChildFile("settings.json")).sampleRate == 44100.0);
+}
+
+namespace
+{
+void saveFakeSoloSettings(Fixture& f)
+{
+    Settings s;
+    s.audioDeviceType = "Fake";
+    s.audioDeviceName = "Fake Solo";
+    s.sampleRate = 48000;
+    s.bufferSize = 128;
+    REQUIRE(f.data.createDirectory());
+    REQUIRE(s.save(f.data.getChildFile("settings.json")));
+}
+} // namespace
+
+TEST_CASE("bridge: deferred audio start opens the device only when startAudio is called")
+{
+    Fixture f;
+    saveFakeSoloSettings(f);
+    f.start(true, true);
+    CHECK(f.state()["deviceStatus"]["status"].toString() == "NoDevice");
+
+    f.engine->startAudio(true);
+    CHECK(f.state()["deviceStatus"]["status"].toString() == "Running");
+    CHECK(f.engine->planSpec().maxBlock == 128);
+    CHECK(f.state()["startupErrors"].size() == 0);
+
+    f.engine->startAudio(true); // only the first call counts
+    CHECK(f.state()["deviceStatus"]["status"].toString() == "Running");
+}
+
+TEST_CASE("bridge: denied microphone permission is a startup error and leaves audio closed")
+{
+    Fixture f;
+    saveFakeSoloSettings(f);
+    f.start(true, true);
+    f.engine->startAudio(false);
+
+    auto st = f.state();
+    CHECK(st["deviceStatus"]["status"].toString() == "NoDevice");
+    REQUIRE(st["startupErrors"].size() == 1);
+    CHECK(st["startupErrors"][0]["context"].toString() == "audioPermission");
+    CHECK(st["startupErrors"][0]["message"].toString().contains("Privacy & Security"));
+    CHECK(f.lastEvent("error")["context"].toString() == "audioPermission");
 }

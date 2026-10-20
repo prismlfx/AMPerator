@@ -116,9 +116,8 @@ Engine::Engine(Options o)
         audio = std::make_unique<AudioIO>(*manager, realtime);
         audio->onStatus = [this](DeviceStatus) { pollStatus(); };
         audio->onDeviceRestarted = [this](double sr, int bs) { rebuildForDevice(sr, bs); };
-        if (const auto r = audio->apply(settings); r.failed())
-            reportError("Could not open the audio device: " + r.getErrorMessage(), "audioDevice", {}, true);
-        audio->writeBack(settings);
+        if (! o.deferAudioStart)
+            openAudioDevice(true);
     }
 
     loadInitialRig();
@@ -139,6 +138,32 @@ Engine::Engine(Options o)
         meterTimer.startTimerHz(30);
 
     saveSettings();
+}
+
+void Engine::openAudioDevice(bool permissionGranted)
+{
+    if (audio == nullptr || audioStarted)
+        return;
+    audioStarted = true;
+    if (! permissionGranted)
+    {
+        reportError(juce::String::fromUTF8("Microphone access denied \u2014 open System Settings \u2192 Privacy & "
+                                           "Security \u2192 Microphone, enable AMPerator, then relaunch"),
+                    "audioPermission", {}, true);
+        return;
+    }
+    if (const auto r = audio->apply(settings); r.failed())
+        reportError("Could not open the audio device: " + r.getErrorMessage(), "audioDevice", {}, true);
+    audio->writeBack(settings);
+}
+
+void Engine::startAudio(bool permissionGranted)
+{
+    if (audio == nullptr || audioStarted)
+        return;
+    openAudioDevice(permissionGranted); // a successful open rebuilds the current rig via onDeviceRestarted
+    saveSettings();
+    pollStatus();
 }
 
 Engine::~Engine()

@@ -13,8 +13,12 @@ include(CTest)
 include(cmake/Dependencies.cmake)
 include(cmake/AmpJuce.cmake)
 
+option(AMP_BUILD_APP "Build the AMPerator app (needs Node.js + npm for the web UI)" ON)
+
 add_subdirectory(engine)
-add_subdirectory(app)
+if(AMP_BUILD_APP)
+  add_subdirectory(app)
+endif()
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()

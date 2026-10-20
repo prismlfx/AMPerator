@@ -73,12 +73,20 @@ public:
         std::vector<std::unique_ptr<juce::AudioPluginFormat>> pluginFormats; // added to PluginHost
         bool addDefaultPluginFormats = true;
         juce::AudioDeviceManager* deviceManager = nullptr; // not owned; null = the Engine owns one (startAudio only)
+        /** With startAudio: set up audio but leave the device closed until startAudio() is called (the app asks for
+            microphone permission first, so the message thread never blocks on the OS permission prompt). */
+        bool deferAudioStart = false;
     };
 
     explicit Engine(Options);
     ~Engine();
 
     Bridge& bridge();
+
+    /** Opens the audio device from the settings (Options::deferAudioStart). Only the first call does anything.
+        permissionGranted = false (microphone access denied) leaves audio closed and records the startup error
+        `audioPermission` with the steps to fix it. */
+    void startAudio(bool permissionGranted = true);
 
     /** The Engine cannot own windows: the app sets this to open a hosted plugin's editor. */
     std::function<void(juce::AudioPluginInstance*, const juce::String& nodeId)> onOpenPluginEditor;
@@ -124,6 +132,7 @@ private:
     CommandResult structuralEdit(const std::function<juce::String(RigDocument&)>& edit);
     void rebuildForDevice(double sampleRate, int bufferSize);
     void loadInitialRig();
+    void openAudioDevice(bool permissionGranted);
     void refreshMappings();
     RigDocument currentDoc() const;
     juce::var rigLoadedPayload() const;
@@ -172,7 +181,7 @@ private:
 
     ProcessSpec spec { 48000.0, 512 };
     std::optional<LiveRig> live;
-    bool dirty = false, saved = false, tunerOn = false;
+    bool dirty = false, saved = false, tunerOn = false, audioStarted = false;
     juce::var userArt; // object: "<rigId>/<nodeId>" -> file name in Art/
     juce::Array<juce::var> startupErrors; // {message, context, rigId?}: problems found while starting (getState)
 

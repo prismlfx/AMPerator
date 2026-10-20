@@ -54,8 +54,29 @@ std::optional<juce::WebBrowserComponent::Resource> uiResource(const juce::String
 
 bool useDevServer()
 {
+   #if JUCE_DEBUG
     return juce::SystemStats::getEnvironmentVariable("AMP_UI_DEV", {}) == "1";
+   #else
+    return false; // release builds always serve the embedded UI
+   #endif
 }
+
+/** The web view only ever shows our UI: navigation is limited to the embedded resources (or the dev server in dev
+    mode), and pages can't open new windows. */
+class UiBrowser final : public juce::WebBrowserComponent
+{
+public:
+    using WebBrowserComponent::WebBrowserComponent;
+
+    bool pageAboutToLoad(const juce::String& url) override
+    {
+        return url.startsWith(juce::WebBrowserComponent::getResourceProviderRoot())
+            || (useDevServer() && url.startsWith(devServerUrl))
+            || url == "about:blank";
+    }
+
+    void newWindowAttemptingToLoad(const juce::String&) override {}
+};
 } // namespace
 
 //==============================================================================
@@ -144,7 +165,7 @@ private:
     }
 
     Engine& engine;
-    juce::WebBrowserComponent browser;
+    UiBrowser browser;
     std::unique_ptr<juce::FileChooser> chooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Content)

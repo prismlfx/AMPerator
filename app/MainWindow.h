@@ -17,8 +17,9 @@ class Engine;
       chooseFolder()  opens a native folder chooser (the web view has none); resolves with the chosen absolute
                       path, or "" when cancelled.
 
-    The page is served from the embedded ui/dist (binary data) through the resource provider; with the environment
-    variable AMP_UI_DEV=1 it loads the Vite dev server at http://localhost:5173 instead (cd ui && npm run dev). */
+    The page is served from the embedded ui/dist (binary data) through the resource provider; in Debug builds the
+    environment variable AMP_UI_DEV=1 loads the Vite dev server at http://localhost:5173 instead (cd ui && npm run
+    dev). Navigation is restricted to those origins and pages cannot open new windows. */
 class MainWindow final : public juce::DocumentWindow
 {
 public:

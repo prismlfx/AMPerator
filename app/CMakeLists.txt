@@ -15,7 +15,8 @@ juce_add_gui_app(AMPerator
 find_program(AMP_NODE_EXECUTABLE node)
 find_program(AMP_NPM_EXECUTABLE npm)
 if(NOT AMP_NODE_EXECUTABLE OR NOT AMP_NPM_EXECUTABLE)
-  message(FATAL_ERROR "Node.js and npm are required to build the AMPerator UI (ui/). Install Node.js 20+ and re-run CMake.")
+  message(FATAL_ERROR "Node.js and npm are required to build the AMPerator UI (ui/). Install Node.js 20+ and re-run CMake, "
+                      "or configure with -DAMP_BUILD_APP=OFF to build only the engine and tests.")
 endif()
 get_filename_component(_amp_node_dir "${AMP_NODE_EXECUTABLE}" DIRECTORY)
 set(_amp_npm ${CMAKE_COMMAND} -E env "PATH=${_amp_node_dir}:$ENV{PATH}" "${AMP_NPM_EXECUTABLE}")
@@ -52,7 +53,11 @@ juce_add_binary_data(amp_ui_data HEADER_NAME AmpUiData.h NAMESPACE AmpUiData SOU
 add_dependencies(amp_ui_data amp_ui)
 
 # ---- App ------------------------------------------------------------------------------------------------------
-target_sources(AMPerator PRIVATE Main.cpp MainWindow.cpp MainWindow.h)
+target_sources(AMPerator PRIVATE Main.cpp MainWindow.cpp MainWindow.h MicrophonePermission.h MicrophonePermission.cpp)
+if(APPLE)
+  target_sources(AMPerator PRIVATE MicrophonePermission.mm)
+  target_link_libraries(AMPerator PRIVATE "-framework AVFoundation")
+endif()
 target_compile_definitions(AMPerator PRIVATE
   JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:AMPerator,JUCE_PRODUCT_NAME>"
   JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")

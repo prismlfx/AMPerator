@@ -14,7 +14,7 @@ called from `ui/src/bridge.ts` with JUCE's `__juce__invoke` / `__juce__complete`
 | `chooseFolder` | — | the chosen absolute path, or `""` if cancelled | Native folder chooser (the web view has none); used to add watched folders. One chooser at a time (a second call completes with `""`). |
 
 The UI is served from the embedded `ui/dist` (`WebBrowserComponent::getResourceProviderRoot()`); with the environment
-variable `AMP_UI_DEV=1` the app loads the Vite dev server at `http://localhost:5173` instead (`cd ui && npm run dev`).
+variable `AMP_UI_DEV=1` a Debug build of the app loads the Vite dev server at `http://localhost:5173` instead (`cd ui && npm run dev`).
 
 ## Envelopes
 
@@ -66,7 +66,7 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 
 | Command | Args | Result | Notes / events |
 |---|---|---|---|
-| `getState` | — | `{protocol: 1, rig, report, dirty, startupErrors: [{message, context, rigId?}], saved, learning, settings, deviceStatus, controlStatus, tunerOn, favorites: [id], recents: [id], bands: [name]}` | Call on UI start-up. `startupErrors` lists problems found while starting (`context` `loadRig` with the `rigId` of a last rig that could not be loaded — offer `restoreBackup`; `audioDevice`). |
+| `getState` | — | `{protocol: 1, rig, report, dirty, startupErrors: [{message, context, rigId?}], saved, learning, settings, deviceStatus, controlStatus, tunerOn, favorites: [id], recents: [id], bands: [name]}` | Call on UI start-up. `startupErrors` lists problems found while starting (`context` `loadRig` with the `rigId` of a last rig that could not be loaded — offer `restoreBackup`; `audioDevice`; `audioPermission` when microphone access was denied — the app opens the device only after asking, so this entry may appear after the first `getState`). |
 | `listRigs` | — | `{rigs: [{id, name, band, favorite}], bands: [name]}` | Sorted by band, then name. Corrupt files are not listed. |
 | `loadRig` | `id` | `{id}` | `rigLoaded`, `rigDirty{false}` if it was dirty. Corrupt / unreadable rig → `ok:false` with the parse error (file untouched; offer `restoreBackup`). Unsaved changes of the current rig are discarded (UI confirms using `dirty`). |
 | `newRig` | `name?` (default `"New Rig"`), `band?` (default `"My Tones"`) | `{id}` | Default chain In → Gate → NamAmp → CabIR → Out; **unsaved** until `saveRig` (`saved:false`). `rigLoaded`. |
@@ -106,4 +106,4 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `controlStatus` | ControlStatus | On change (polled every 1 s while controls run). |
 | `controlEvent` | `{control, pressed}` | Every footswitch/MIDI edge (`footswitch:L`, `midi:<device>:cc<n>`, ...). |
 | `learned` | `{control, node}` | A learn completed. |
-| `error` | `{message, context}` | Asynchronous problems (`context`: `audioDevice`, `deviceRestart`, `swapPlan`, `settings`). Command failures are replies, not events. Errors raised before the UI set `send` (startup) are queued and delivered ahead of the first reply/event. |
+| `error` | `{message, context}` | Asynchronous problems (`context`: `audioDevice`, `audioPermission` (microphone access denied; also listed in `startupErrors`), `deviceRestart`, `swapPlan`, `settings`). Command failures are replies, not events. Errors raised before the UI set `send` (startup) are queued and delivered ahead of the first reply/event. |

@@ -136,3 +136,31 @@ describe('confirmDiscardIfDirty', () => {
     await expect(state.confirmDiscardIfDirty(async () => true)).resolves.toBe(true);
   });
 });
+
+describe('onToastableError', () => {
+  const err = (data: object) => juce.fromBackend('amp', { v: 1, event: 'error', data });
+
+  it('skips errors before getState answered and errors already shown as startup banners', async () => {
+    const toast = vi.fn();
+    state.onToastableError(toast);
+    const p = state.initStore();
+    err({ message: 'no device', context: 'audioDevice' }); // queued startup error, delivered before the reply
+    juce.reply(juce.commands()[0].id, true, getStateResult({ startupErrors: [{ message: 'no device', context: 'audioDevice' }] }));
+    await p;
+    err({ message: 'no device', context: 'audioDevice' }); // duplicate of a banner
+    expect(toast).not.toHaveBeenCalled();
+
+    err({ message: 'swap failed', context: 'swapPlan' });
+    expect(toast).toHaveBeenCalledWith({ message: 'swap failed', context: 'swapPlan' });
+  });
+
+  it('turns a late audioPermission error into a startup banner instead of a toast', async () => {
+    const toast = vi.fn();
+    state.onToastableError(toast);
+    await started();
+    err({ message: 'Microphone access denied', context: 'audioPermission' });
+    err({ message: 'Microphone access denied', context: 'audioPermission' });
+    expect(toast).not.toHaveBeenCalled();
+    expect(state.store.get().startupErrors).toEqual([{ message: 'Microphone access denied', context: 'audioPermission' }]);
+  });
+});

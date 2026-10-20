@@ -1,9 +1,9 @@
 // App shell: header (rig, device status, gear), banners, the current view, toasts.
 
 import './styles.css';
-import { call, on } from './bridge';
+import { call } from './bridge';
 import { el, toast } from './dialog';
-import { dismissStartupError, initStore, store, type AppState, type RigNode } from './state';
+import { confirmDiscardIfDirty, dismissStartupError, initStore, onToastableError, store, type AppState, type RigNode } from './state';
 import { openSettings } from './views/settings';
 
 const app = document.getElementById('app')!;
@@ -57,6 +57,7 @@ function renderBanners(s: AppState) {
       const restore = el('button', { class: 'button small' }, 'Open last backup');
       const rigId = e.rigId;
       restore.addEventListener('click', async () => {
+        if (!(await confirmDiscardIfDirty())) return; // restoring loads that rig over the current one
         try {
           await call('restoreBackup', { id: rigId });
           dismiss();
@@ -116,7 +117,7 @@ function nodeLabel(n: RigNode): string {
 store.subscribe(render);
 render(store.get());
 
-on('error', (d) => toast(d?.message ?? 'Unknown error'));
+onToastableError((e) => toast(e.message ?? 'Unknown error'));
 
 initStore().catch((e) => {
   connectionError = (e as Error).message;

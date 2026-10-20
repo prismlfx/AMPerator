@@ -136,6 +136,22 @@ export function dismissStartupError(index: number) {
   update({ startupErrors: current.startupErrors.filter((_, i) => i !== index) });
 }
 
+/** Calls `fn` for engine `error` events that should be shown as a toast: not those delivered before getState
+    answered (startup errors, shown as banners from getState), not repeats of a startup banner, and not a late
+    `audioPermission` error (microphone access is answered after start-up), which becomes a banner itself. */
+export function onToastableError(fn: (e: { message: string; context: string }) => void): () => void {
+  return on('error', (e) => {
+    if (!current.connected || e == null) return;
+    const same = (s: StartupError) => s.message === e.message && s.context === e.context;
+    if (current.startupErrors.some(same)) return;
+    if (e.context === 'audioPermission') {
+      update({ startupErrors: [...current.startupErrors, { message: e.message, context: e.context }] });
+      return;
+    }
+    fn(e);
+  });
+}
+
 let started = false;
 
 /** Subscribes to engine events and loads the initial state. Call once at start-up. */

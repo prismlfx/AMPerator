@@ -11,6 +11,7 @@ export function openSettings() {
 
   let settings: Settings | null = null;
   let busy = false;
+  let choosing = false; // the native folder chooser is open
 
   const form = el('div', { class: 'settings-form' }, el('p', { class: 'muted' }, 'Loading…'));
   const status = el('div', { class: 'settings-status' });
@@ -50,6 +51,7 @@ export function openSettings() {
   async function apply(patch: Partial<Settings>) {
     busy = true;
     renderForm();
+    renderFolders();
     try {
       accept(await call<Settings>('setSettings', patch));
     } catch (e) {
@@ -58,8 +60,12 @@ export function openSettings() {
     } finally {
       busy = false;
       renderForm();
+      renderFolders();
     }
   }
+
+  /** The watched folders as of now (not as of when a button was rendered: a change may have landed since). */
+  const currentFolders = () => settings?.watchedFolders ?? [];
 
   function renderForm() {
     if (!settings) return;
@@ -101,13 +107,23 @@ export function openSettings() {
   function renderFolders() {
     if (!settings) return;
     const list = settings.watchedFolders ?? [];
-    const add = el('button', { class: 'button' }, 'Add folder…');
+    const add = el('button', { class: 'button' }, choosing ? 'Choosing…' : 'Add folder…');
+    add.disabled = busy || choosing;
     add.addEventListener('click', async () => {
+      choosing = true;
+      renderFolders();
       try {
         const path = await invokeNative('chooseFolder');
-        if (typeof path === 'string' && path !== '' && !list.includes(path)) await apply({ watchedFolders: [...list, path] });
+        const folders = currentFolders();
+        if (typeof path === 'string' && path !== '' && !folders.includes(path)) {
+          choosing = false;
+          await apply({ watchedFolders: [...folders, path] });
+        }
       } catch (e) {
         toast((e as Error).message);
+      } finally {
+        choosing = false;
+        renderFolders();
       }
     });
     folders.replaceChildren(
@@ -119,7 +135,10 @@ export function openSettings() {
             { class: 'folder-list' },
             ...list.map((f) => {
               const remove = el('button', { class: 'button small', title: `Stop watching ${f}` }, 'Remove');
-              remove.addEventListener('click', () => apply({ watchedFolders: list.filter((x) => x !== f) }));
+              remove.disabled = busy;
+              remove.addEventListener('click', () => {
+                if (!busy) void apply({ watchedFolders: currentFolders().filter((x) => x !== f) });
+              });
               return el('li', {}, el('span', { class: 'path', title: f }, f), remove);
             }),
           ),
@@ -190,12 +209,12 @@ export function controlStatusView(c: ControlStatus): Node[] {
   switch (c.hid) {
     case 'Connected':
       hid = c.exclusive
-        ? el('p', {}, el('strong', { class: 'ok' }, 'Connected (exclusive). '), 'Presses only control AMPerator, even in the background.')
+        ? el('p', {}, el('strong', { class: 'ok' }, 'Connected'), ' — exclusive: presses only control AMPerator, even in the background.')
         : el(
             'p',
             {},
-            el('strong', { class: 'ok' }, 'Connected (shared): '),
-            'presses also type into other apps — tip: set your pedal to send F13/F14/F15.',
+            el('strong', { class: 'ok' }, 'Connected'),
+            ' — shared: presses also type into other apps — tip: set your pedal to send F13/F14/F15.',
           );
       break;
     case 'PermissionDenied':

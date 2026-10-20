@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 // The app embeds ui/dist with juce_add_binary_data, whose file list is fixed at CMake configure time
 // (app/CMakeLists.txt, AMP_UI_FILES). So the build emits stable, unhashed names, inlines every asset
 // (images, fonts) into the JS/CSS, and produces exactly: index.html, assets/index.js, assets/index.css.
-// app/check-ui-dist.cmake fails the app build if anything else appears.
+// app/CheckUiDist.cmake fails the app build if anything else appears.
 export default defineConfig({
   base: './',
   build: {
