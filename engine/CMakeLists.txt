@@ -31,6 +31,12 @@ add_library(amp_engine STATIC
   dsp/NamAmpNode.cpp
   dsp/NamAmpNode.h
   dsp/Node.h
+  engine/ProcessingPlan.cpp
+  engine/ProcessingPlan.h
+  engine/RealtimeEngine.cpp
+  engine/RealtimeEngine.h
+  engine/RtSafety.cpp
+  engine/RtSafety.h
   model/ChainGraph.cpp
   model/ChainGraph.h
   model/RigDocument.cpp

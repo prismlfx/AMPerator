@@ -7,6 +7,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "dsp/NamAmpNode.h"
+#include "engine/RtSafety.h"
 #include "support/OfflineRender.h"
 
 namespace
@@ -192,6 +193,27 @@ TEST_CASE("nam_amp: resampler has no underruns across rates and block sizes")
     const auto in = sine(440.0f, 0.1f, hostSr, 0.5);
     const auto out = renderOffline(*node, in, hostSr, block);
     REQUIRE(allFinite(out));
+    REQUIRE(node->underrunCount() == 0);
+}
+
+TEST_CASE("nam_amp: processing allocates nothing")
+{
+    constexpr double hostSr = 44100.0; // resampling path (model runs at 48 kHz)
+    const int block = GENERATE(64, 333);
+    CAPTURE(block);
+    auto node = ampWithFixture();
+    node->prepare({ hostSr, block });
+    const auto in = sine(440.0f, 0.1f, hostSr, 2.0);
+    juce::AudioBuffer<float> work(2, block);
+
+    amp::RtSafety::reset();
+    for (int pos = 0; pos + block <= in.getNumSamples(); pos += block)
+    {
+        work.copyFrom(0, 0, in, 0, pos, block);
+        const amp::RtSafety::ScopedNoAlloc guard;
+        node->process(work, block);
+    }
+    REQUIRE(amp::RtSafety::violations() == 0);
     REQUIRE(node->underrunCount() == 0);
 }
 
