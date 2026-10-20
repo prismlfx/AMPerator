@@ -39,6 +39,8 @@ add_library(amp_engine STATIC
   dsp/CabIRNode.h
   dsp/NamAmpNode.cpp
   dsp/NamAmpNode.h
+  dsp/TunerTap.cpp
+  dsp/TunerTap.h
   dsp/Node.h
   engine/ProcessingPlan.cpp
   engine/ProcessingPlan.h
