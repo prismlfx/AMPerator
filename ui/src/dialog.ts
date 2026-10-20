@@ -66,6 +66,66 @@ export function confirmDialog(message: string, okLabel = 'OK', cancelLabel = 'Ca
   });
 }
 
+export interface Choice<T> {
+  label: string;
+  value: T;
+  primary?: boolean;
+  danger?: boolean;
+}
+
+/** A message with one button per choice; resolves with the chosen value, or `dismissed` (Esc, ×, backdrop). */
+export function choiceDialog<T>(title: string, message: string, choices: Choice<T>[], dismissed: T): Promise<T> {
+  return new Promise((resolve) => {
+    let answer = dismissed;
+    const modal = openModal(title, () => resolve(answer), 'modal-small');
+    const buttons = choices.map((c) => {
+      const b = el('button', { class: `button${c.primary ? ' primary' : ''}${c.danger ? ' danger' : ''}` }, c.label);
+      b.addEventListener('click', () => {
+        answer = c.value;
+        modal.close();
+      });
+      return b;
+    });
+    modal.body.append(el('p', {}, message), el('div', { class: 'modal-actions' }, ...buttons));
+    (buttons.find((_, i) => choices[i].primary) ?? buttons[0])?.focus();
+  });
+}
+
+/** Text fields (label → initial value); resolves with the edited values, or null when cancelled. */
+export function promptDialog<K extends string>(
+  title: string,
+  fields: { key: K; label: string; value: string }[],
+  okLabel = 'OK',
+): Promise<Record<K, string> | null> {
+  return new Promise((resolve) => {
+    let answer: Record<K, string> | null = null;
+    const modal = openModal(title, () => resolve(answer), 'modal-small');
+    const inputs = fields.map((f) => {
+      const input = el('input', { type: 'text', value: f.value, 'aria-label': f.label, spellcheck: 'false' });
+      input.value = f.value;
+      return input;
+    });
+    const ok = el('button', { class: 'button primary' }, okLabel);
+    const cancel = el('button', { class: 'button' }, 'Cancel');
+    const submit = () => {
+      answer = Object.fromEntries(fields.map((f, i) => [f.key, inputs[i].value])) as Record<K, string>;
+      modal.close();
+    };
+    ok.addEventListener('click', submit);
+    cancel.addEventListener('click', () => modal.close());
+    for (const input of inputs)
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submit();
+      });
+    modal.body.append(
+      ...fields.map((f, i) => el('label', { class: 'field' }, el('span', { class: 'field-label' }, f.label), inputs[i])),
+      el('div', { class: 'modal-actions' }, cancel, ok),
+    );
+    inputs[0]?.select();
+    inputs[0]?.focus();
+  });
+}
+
 /** Transient notice in the bottom-right corner (errors stay a little longer). */
 export interface ToastAction {
   label: string;

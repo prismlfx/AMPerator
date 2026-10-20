@@ -1,6 +1,7 @@
 #include "storage/RigStore.h"
 
 #include <algorithm>
+#include <tuple>
 
 #include "storage/AtomicFile.h"
 
@@ -12,11 +13,14 @@ const char* const kDefaultBand = "My Tones";
 
 struct Scanned { std::optional<RigDocument> rig; juce::File file; };
 
+constexpr int kDirs = juce::File::findDirectories | juce::File::ignoreHiddenFiles;
+constexpr int kFiles = juce::File::findFiles | juce::File::ignoreHiddenFiles;
+
 std::vector<Scanned> scanRigs(const juce::File& rigsDir)
 {
     std::vector<Scanned> out;
-    for (auto& bandDir : rigsDir.findChildFiles(juce::File::findDirectories, false))
-        for (auto& f : bandDir.findChildFiles(juce::File::findFiles, false, "*.amprig"))
+    for (auto& bandDir : rigsDir.findChildFiles(kDirs, false))
+        for (auto& f : bandDir.findChildFiles(kFiles, false, "*.amprig"))
             out.push_back({ parseRig(f.loadFileAsString()).rig, f });
     return out;
 }
@@ -30,10 +34,15 @@ bool notForeign(const juce::File& f, const juce::String& rigId)
     return !parsed || parsed->id.isEmpty() || parsed->id == rigId;
 }
 
+// Removes a band folder that holds nothing but hidden files (.DS_Store and the like).
 void pruneIfEmpty(const juce::File& dir)
 {
-    if (dir.isDirectory() && dir.getNumberOfChildFiles(juce::File::findFilesAndDirectories) == 0)
-        dir.deleteFile();
+    if (! dir.isDirectory()
+        || dir.getNumberOfChildFiles(juce::File::findFilesAndDirectories | juce::File::ignoreHiddenFiles) != 0)
+        return;
+    for (auto& hidden : dir.findChildFiles(juce::File::findFiles, false))
+        hidden.deleteFile();
+    dir.deleteFile(); // fails (keeps the folder) if a hidden folder is left inside
 }
 
 } // namespace
@@ -52,13 +61,15 @@ juce::File RigStore::backupFile(const juce::File& rig, int n)
     return rig.getSiblingFile(rig.getFileName() + ".bak." + juce::String(n));
 }
 
-bool RigStore::rotateBackups(const juce::File& rig)
+bool RigStore::rotateBackups(const juce::File& rig) { return pushBackup(rig, rig); }
+
+bool RigStore::pushBackup(const juce::File& rig, const juce::File& source)
 {
     backupFile(rig, maxBackups).deleteFile();
     for (int i = maxBackups - 1; i >= 1; --i)
         if (auto b = backupFile(rig, i); b.existsAsFile() && !b.moveFileTo(backupFile(rig, i + 1)))
             return false;
-    return rig.copyFileTo(backupFile(rig, 1));
+    return source.copyFileTo(backupFile(rig, 1));
 }
 
 void RigStore::moveBackups(const juce::File& from, const juce::File& to)
@@ -72,12 +83,6 @@ void RigStore::moveBackups(const juce::File& from, const juce::File& to)
         dst.deleteFile();
         src.moveFileTo(dst);
     }
-}
-
-void RigStore::deleteBackups(const juce::File& rig)
-{
-    for (int i = 1; i <= maxBackups; ++i)
-        backupFile(rig, i).deleteFile();
 }
 
 juce::String RigStore::sanitizeFileName(const juce::String& name)
@@ -108,9 +113,11 @@ std::vector<RigEntry> RigStore::list() const
     {
         if (!s.rig || s.rig->id.isEmpty())
             continue;
-        knownPaths_[s.rig->id] = s.file;
         out.push_back({ s.rig->id, s.rig->name, s.rig->band, s.file });
     }
+    resolveDuplicateIds(out);
+    for (auto& e : out)
+        knownPaths_[e.id] = e.file;
     std::sort(out.begin(), out.end(), [](const RigEntry& a, const RigEntry& b)
     {
         if (int c = a.band.compareIgnoreCase(b.band))
@@ -122,6 +129,41 @@ std::vector<RigEntry> RigStore::list() const
     return out;
 }
 
+void RigStore::resolveDuplicateIds(std::vector<RigEntry>& entries) const
+{
+    std::map<juce::String, std::vector<size_t>> byId;
+    for (size_t i = 0; i < entries.size(); ++i)
+        byId[entries[i].id].push_back(i);
+    for (auto& [id, indices] : byId)
+    {
+        if (indices.size() < 2)
+            continue;
+        // The owner: the file this store already knew for the id, else the oldest file, else the shortest name
+        // (a Finder copy is "<name> copy.amprig" / "<name> 2.amprig"), else path order.
+        const auto known = knownPaths_.find(id);
+        auto rank = [&](size_t i)
+        {
+            const auto& f = entries[i].file;
+            return std::make_tuple(known != knownPaths_.end() && known->second == f ? 0 : 1,
+                                   f.getCreationTime().toMilliseconds(), f.getFileName().length(), f.getFullPathName());
+        };
+        std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) { return rank(a) < rank(b); });
+        for (size_t k = 1; k < indices.size(); ++k)
+        {
+            auto& e = entries[indices[k]];
+            auto parsed = parseRig(e.file.loadFileAsString()).rig;
+            if (!parsed)
+                continue;
+            parsed->id = juce::Uuid().toString();
+            if (writeFileAtomically(e.file, serializeRig(*parsed)))
+                e.id = parsed->id;
+        }
+    }
+    // A rewrite that failed leaves the duplicate listed under the owner's id: drop it rather than list one id twice.
+    std::map<juce::String, int> seen;
+    std::erase_if(entries, [&](const RigEntry& e) { return seen[e.id]++ > 0; });
+}
+
 juce::StringArray RigStore::bands() const
 {
     juce::StringArray b;
@@ -129,8 +171,8 @@ juce::StringArray RigStore::bands() const
     for (auto& e : list())
         b.addIfNotAlreadyThere(e.band);
     // Folder names only count for user-created folders that hold no rigs (a rig's band comes from its JSON).
-    for (auto& d : rigsDir().findChildFiles(juce::File::findDirectories, false))
-        if (d.findChildFiles(juce::File::findFiles, false, "*.amprig").isEmpty())
+    for (auto& d : rigsDir().findChildFiles(kDirs, false))
+        if (d.findChildFiles(kFiles, false, "*.amprig").isEmpty())
             b.addIfNotAlreadyThere(d.getFileName());
     b.sortNatural();
     return b;
@@ -206,6 +248,8 @@ juce::Result RigStore::save(const RigDocument& rig)
     if (oldFile != juce::File() && oldFile != target && oldFile.existsAsFile())
     {
         moveBackups(oldFile, target);
+        if (!oldIsCorrupt)
+            pushBackup(target, oldFile); // the version saved under the old name/band stays restorable
         if (oldIsCorrupt)
         {
             // Never delete bytes we could not parse: park them beside the rig.
@@ -233,13 +277,17 @@ juce::Result RigStore::remove(const juce::String& rigId)
         return juce::Result::fail("Rig not found: " + rigId);
     if (!notForeign(f, rigId))
         return juce::Result::fail("Refusing to delete " + f.getFullPathName() + ": it now holds a different rig");
-    if (f.existsAsFile() && !f.deleteFile())
-        return juce::Result::fail("Cannot delete " + f.getFullPathName());
-    deleteBackups(f);
+    if (f.existsAsFile() && !trash_(f))
+        return juce::Result::fail("Cannot move " + f.getFullPathName() + " to the trash");
+    for (int i = 1; i <= maxBackups; ++i)
+        if (auto b = backupFile(f, i); b.existsAsFile())
+            trash_(b);
     knownPaths_.erase(rigId);
     pruneIfEmpty(f.getParentDirectory());
     return juce::Result::ok();
 }
+
+void RigStore::setTrashFunction(std::function<bool(const juce::File&)> fn) { trash_ = std::move(fn); }
 
 std::vector<juce::File> RigStore::backups(const juce::String& rigId) const
 {

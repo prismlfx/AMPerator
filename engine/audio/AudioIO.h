@@ -20,6 +20,9 @@ enum class DeviceStatus
 
 // Wraps a juce::AudioDeviceManager for the rig player: opens the interface named in Settings, falls back to
 // the type's default device, reports latency / xruns, and reopens the same settings when the device comes back.
+// The Settings passed to apply() are the user's preferred device: while a fallback runs (the preferred device was
+// missing or failed to open) hot-plug notifications keep checking for it and switch to it -- with its own channels,
+// rate and buffer -- as soon as it is listed again.
 //
 // Threading: everything here is message-thread only (including the ChangeListener notifications).
 // The RealtimeEngine is registered as the manager's audio callback for the lifetime of the AudioIO.
@@ -38,7 +41,11 @@ public:
     juce::Result apply(const Settings& s);
 
     // Copies the device that is actually open (type, name, rate, buffer, channels) into `s`. No device: unchanged.
+    // Callers that keep the user's preference must only do this when usingPreferred() (or nothing was named).
     void writeBack(Settings& s) const;
+
+    // True when the open device is the one named by the last apply() (not a fallback, not closed).
+    bool usingPreferred() const;
 
     DeviceStatus status() const { return currentStatus; }
 
@@ -69,6 +76,7 @@ private:
 
     void changeListenerCallback(juce::ChangeBroadcaster*) override;
     bool deviceRunning() const;
+    bool isListed(const juce::String& deviceName) const; // by any device type
     void setStatus(DeviceStatus);
     void notifyRestarted(double sampleRate, int bufferSize);
     void routeEngineChannels();
@@ -87,6 +95,8 @@ private:
     juce::CriticalSection wantedNameLock; // the watcher reads the wanted name from driver threads
     juce::String wantedName;
     Settings wanted; // what to reapply on reconnect; audioDeviceType/Name are the devices actually chosen
+    Settings preferred; // what the last apply() asked for; reopened when it reappears while a fallback runs
+    bool onFallback = false; // the open (or lost) device is a fallback for `preferred`
     int wantedInput = 0, wantedOutputFirst = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioIO)

@@ -254,3 +254,36 @@ TEST_CASE("audio_io: xrunCount reads the device counter, -1 without a device")
     static_cast<amp_test::FakeDevice*>(f.manager.getCurrentAudioDevice())->xruns = 3;
     CHECK(f.io->xrunCount() == 3);
 }
+
+TEST_CASE("audio_io: after a fallback the preferred device is watched and reopened with its own channels")
+{
+    Fixture f;
+    f.type->removeDevice("Fake Solo");
+    std::vector<std::pair<double, int>> restarts;
+    f.io->onDeviceRestarted = [&](double sr, int bs) { restarts.emplace_back(sr, bs); };
+    auto s = Fixture::solo();
+    s.outputFirstChannel = 1;
+    REQUIRE(f.io->apply(s).wasOk());
+    CHECK(f.currentName() == "Fake Other");
+    CHECK_FALSE(f.io->usingPreferred());
+    CHECK(f.io->status() == DeviceStatus::Running);
+
+    f.hotPlug(); // unrelated list change: stays on the fallback
+    CHECK(f.currentName() == "Fake Other");
+
+    f.type->addDevice("Fake Solo");
+    f.hotPlug();
+    CHECK(f.currentName() == "Fake Solo");
+    CHECK(f.io->usingPreferred());
+    CHECK(f.io->status() == DeviceStatus::Running);
+    CHECK(f.manager.getCurrentAudioDevice()->getActiveOutputChannels() == juce::BigInteger(2));
+    REQUIRE(restarts.size() == 2);
+    CHECK(restarts.back() == std::make_pair(44100.0, 256));
+}
+
+TEST_CASE("audio_io: usingPreferred is true when the named device opened")
+{
+    Fixture f;
+    REQUIRE(f.io->apply(Fixture::solo()).wasOk());
+    CHECK(f.io->usingPreferred());
+}

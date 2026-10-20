@@ -76,6 +76,8 @@ public:
         /** With startAudio: set up audio but leave the device closed until startAudio() is called (the app asks for
             microphone permission first, so the message thread never blocks on the OS permission prompt). */
         bool deferAudioStart = false;
+        /** How deleteRig disposes of rig files; null = the system trash (juce::File::moveToTrash). */
+        std::function<bool(const juce::File&)> trashFile;
     };
 
     explicit Engine(Options);
@@ -109,14 +111,27 @@ public:
     void injectHidStatus(HidFootswitch::Status s);
     /** Spec the current plan was built with (test support). */
     ProcessSpec planSpec() const { return spec; }
+    /** Test support: delivers pending "edited in the plugin" notifications now instead of on the message loop. */
+    void dispatchPendingPluginChanges();
+
+    // ---- Quit (message thread) ----
+    bool isDirty() const { return dirty; }
+    /** The app's quit request (Cmd-Q, window close). True: nothing unsaved, quit now. False: the rig has unsaved
+        changes, so `quitRequested` was emitted and the UI answers with confirmQuit (the app falls back to a native
+        dialog that calls confirmQuit itself if the UI does not answer). */
+    bool requestQuit();
+    bool quitPending() const { return quitIsPending; }
+    /** Called (message thread) when confirmQuit decided to quit: after a successful save, or on discard. */
+    std::function<void()> onQuitConfirmed;
 
     // ---- Commands (message thread), dispatched by Bridge ----
     CommandResult getState();
     CommandResult listRigs();
     CommandResult loadRig(const juce::String& id);
     CommandResult newRig(const juce::String& name, const juce::String& band);
-    /** Non-blank name/band (trimmed) rename the rig / move it to that band before it is written. */
-    CommandResult saveRig(const juce::String& name = {}, const juce::String& band = {});
+    /** Non-blank name/band (trimmed) rename the rig / move it to that band before it is written. asNew: save a copy
+        under a fresh id (the original file is left untouched) and make it the current rig (rigLoaded). */
+    CommandResult saveRig(const juce::String& name = {}, const juce::String& band = {}, bool asNew = false);
     CommandResult deleteRig(const juce::String& id);
     CommandResult stepRig(int direction); // +1 nextRig, -1 prevRig
     CommandResult addNode(NodeType, int index, const juce::var& plugin, const juce::String& assetFile);
@@ -142,6 +157,8 @@ public:
     CommandResult restoreBackup(const juce::String& id);
     CommandResult setNodeArt(const juce::String& id, const std::optional<juce::String>& archetype,
                              const std::optional<juce::String>& imageFile);
+    /** action = "save" (save, then quit), "discard" (quit) or "cancel" (stay). */
+    CommandResult confirmQuit(const juce::String& action);
 
 private:
     struct TunerPreparer;
@@ -149,6 +166,7 @@ private:
     // Rig lifecycle
     juce::String installRig(const RigDocument&, bool saved, bool structuralEdit);
     void replaceLive(LiveRig&&, bool sameRig);
+    void watchPluginEdits(); // the live rig's plugins mark the rig dirty when edited in their own UI
     CommandResult structuralEdit(const std::function<juce::String(RigDocument&)>& edit);
     void rebuildForDevice(double sampleRate, int bufferSize);
     void loadInitialRig();
@@ -172,7 +190,6 @@ private:
     juce::var controlStatusVar() const;
     void pollStatus();
     void handleRawKey(int code);
-    void cancelPendingAssign();
     HidFootswitch::Status currentHidStatus() const { return hidStatusOverride ? *hidStatusOverride : hid.status(); }
     void pollTuner();
     void emitMeter();
@@ -210,7 +227,7 @@ private:
 
     ProcessSpec spec { 48000.0, 512 };
     std::optional<LiveRig> live;
-    bool dirty = false, saved = false, tunerOn = false, audioStarted = false;
+    bool dirty = false, saved = false, tunerOn = false, audioStarted = false, quitIsPending = false;
     juce::var userArt; // object: "<rigId>/<nodeId>" -> file name in Art/
     juce::Array<juce::var> startupErrors; // {message, context, rigId?}: problems found while starting (getState)
 

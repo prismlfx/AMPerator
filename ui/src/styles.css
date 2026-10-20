@@ -175,6 +175,9 @@ input {
   color: #1a1206;
   font-weight: 600;
 }
+.button.danger {
+  color: var(--danger);
+}
 .button:disabled {
   opacity: 0.5;
   cursor: default;

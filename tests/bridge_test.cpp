@@ -34,6 +34,7 @@ struct Fixture
     juce::File lib = dir.getChildFile("lib");
     juce::File data = dir.getChildFile("data");
     std::unique_ptr<juce::AudioDeviceManager> manager; // only for the fake-device test
+    amp_test::FakeType* fakeType = nullptr;              // owned by `manager`
     std::unique_ptr<Engine> engine;
     std::vector<juce::var> sent;
     int nextId = 1;
@@ -57,10 +58,13 @@ struct Fixture
         o.startControls = false;
         o.pluginFormats.push_back(std::make_unique<amp_test::FakeFormat>());
         o.addDefaultPluginFormats = false;
+        o.trashFile = [](const juce::File& f) { return f.deleteFile(); }; // never the user's Trash
         if (withFakeDevice)
         {
             manager = std::make_unique<juce::AudioDeviceManager>();
-            manager->addAudioDeviceType(std::make_unique<amp_test::FakeType>()); // never touches CoreAudio
+            auto type = std::make_unique<amp_test::FakeType>();
+            fakeType = type.get();
+            manager->addAudioDeviceType(std::move(type)); // never touches CoreAudio
             o.deviceManager = manager.get();
         }
         engine = std::make_unique<Engine>(std::move(o));
@@ -808,4 +812,161 @@ TEST_CASE("bridge: user art images get a safe ASCII file name that the art path 
     // A second assignment never overwrites the first file.
     auto r2 = f.ok("setNodeArt", obj({ { "id", amp }, { "imageFile", image.getFullPathName() } }));
     CHECK(r2["art"]["image"].toString() != stored.getFullPathName());
+}
+
+namespace
+{
+juce::var fakeGain(Fixture& f)
+{
+    f.ok("rescanPlugins");
+    for (auto& p : *f.ok("listPlugins")["plugins"].getArray())
+        if (p["name"].toString() == "FakeGain")
+            return p;
+    FAIL("FakeGain not found");
+    return {};
+}
+} // namespace
+
+TEST_CASE("bridge: a parameter changed in a plugin's editor marks the rig dirty")
+{
+    Fixture f;
+    const auto id = f.ok("addNode", obj({ { "type", "Plugin" }, { "index", 0 }, { "plugin", fakeGain(f) } }))["id"].toString();
+    f.ok("saveRig");
+    REQUIRE_FALSE(static_cast<bool>(f.state()["dirty"]));
+    f.engine->dispatchPendingPluginChanges(); // loading/restoring the plugin's state is not an edit
+    REQUIRE_FALSE(static_cast<bool>(f.state()["dirty"]));
+
+    juce::AudioPluginInstance* instance = nullptr;
+    f.engine->onOpenPluginEditor = [&](juce::AudioPluginInstance* p, const juce::String&) { instance = p; };
+    f.ok("openPluginEditor", obj({ { "id", id } }));
+    REQUIRE(instance != nullptr);
+    instance->getParameters()[0]->setValueNotifyingHost(0.8f); // what the plugin's editor does
+    f.engine->dispatchPendingPluginChanges();                  // the message loop delivers the notification
+    CHECK(static_cast<bool>(f.state()["dirty"]));
+    CHECK(static_cast<bool>(f.lastEvent("rigDirty")["dirty"]));
+}
+
+TEST_CASE("bridge: quitting with unsaved changes asks the UI; confirmQuit saves, discards or cancels")
+{
+    Fixture f;
+    int quits = 0;
+    f.engine->onQuitConfirmed = [&] { ++quits; };
+    CHECK(f.engine->requestQuit()); // clean: quit right away, nothing asked
+    CHECK(f.events("quitRequested").empty());
+
+    const auto rigId = f.ok("newRig", obj({ { "name", "Q" }, { "band", "B" } }))["id"].toString();
+    f.ok("setParam", obj({ { "id", f.nodeOfType("Gate") }, { "name", "threshold" }, { "value", -40.0 } }));
+    REQUIRE(static_cast<bool>(f.state()["dirty"]));
+
+    CHECK_FALSE(f.engine->requestQuit());
+    CHECK(f.events("quitRequested").size() == 1);
+    CHECK(f.engine->quitPending());
+    f.ok("confirmQuit", obj({ { "action", "cancel" } }));
+    CHECK(quits == 0);
+    CHECK_FALSE(f.engine->quitPending());
+
+    CHECK_FALSE(static_cast<bool>(f.call("confirmQuit", obj({ { "action", "explode" } }))["ok"]));
+
+    CHECK_FALSE(f.engine->requestQuit());
+    f.ok("confirmQuit", obj({ { "action", "save" } }));
+    CHECK(quits == 1);
+    REQUIRE(f.rigFile("B", "Q").existsAsFile());
+    auto parsed = RigStore(f.lib).load(rigId);
+    REQUIRE(parsed.rig.has_value());
+
+    f.ok("setParam", obj({ { "id", f.nodeOfType("Gate") }, { "name", "threshold" }, { "value", -30.0 } }));
+    CHECK_FALSE(f.engine->requestQuit());
+    f.ok("confirmQuit", obj({ { "action", "discard" } }));
+    CHECK(quits == 2);
+    for (auto& n : RigStore(f.lib).load(rigId).rig->nodes)
+        if (n.type == NodeType::Gate)
+            CHECK(static_cast<double>(n.params["threshold"]) == -40.0); // the discarded edit was not saved
+}
+
+TEST_CASE("bridge: saveRig asNew writes a copy with a fresh id and leaves the original untouched")
+{
+    Fixture f;
+    const auto id = f.ok("newRig", obj({ { "name", "Lead" }, { "band", "Band" } }))["id"].toString();
+    f.ok("saveRig");
+    const auto originalText = f.rigFile("Band", "Lead").loadFileAsString();
+    f.ok("setParam", obj({ { "id", f.nodeOfType("Gate") }, { "name", "threshold" }, { "value", -33.0 } }));
+
+    auto r = f.ok("saveRig", obj({ { "asNew", true }, { "name", "Lead copy" }, { "band", "Other" } }));
+    const auto copyId = r["id"].toString();
+    CHECK(copyId.isNotEmpty());
+    CHECK(copyId != id);
+    CHECK(r["name"].toString() == "Lead copy");
+    CHECK(f.rigFile("Band", "Lead").loadFileAsString() == originalText);
+    REQUIRE(f.rigFile("Other", "Lead copy").existsAsFile());
+    auto copy = RigStore(f.lib).load(copyId);
+    REQUIRE(copy.rig.has_value());
+    for (auto& n : copy.rig->nodes)
+        if (n.type == NodeType::Gate)
+            CHECK(static_cast<double>(n.params["threshold"]) == -33.0);
+
+    auto st = f.state();
+    CHECK(st["rig"]["id"].toString() == copyId); // the copy is now the current rig
+    CHECK_FALSE(static_cast<bool>(st["dirty"]));
+    CHECK(static_cast<bool>(st["saved"]));
+    CHECK(f.lastEvent("rigLoaded")["rig"]["id"].toString() == copyId);
+    CHECK(f.ok("listRigs")["rigs"].size() == 2);
+
+    // Without a name the copy keeps the rig's name; the store picks a free file name.
+    const auto third = f.ok("saveRig", obj({ { "asNew", true } }))["id"].toString();
+    CHECK(third != copyId);
+    CHECK(f.rigFile("Other", "Lead copy (2)").existsAsFile());
+}
+
+TEST_CASE("bridge: starting without the preferred device keeps it in the settings and switches back when it appears")
+{
+    Fixture f;
+    Settings s;
+    s.audioDeviceType = "Fake";
+    s.audioDeviceName = "Fake Solo";
+    s.outputFirstChannel = 1;
+    s.sampleRate = 48000;
+    s.bufferSize = 128;
+    REQUIRE(f.data.createDirectory());
+    REQUIRE(s.save(f.data.getChildFile("settings.json")));
+
+    f.start(true, true);
+    f.fakeType->removeDevice("Fake Solo");
+    f.engine->startAudio(true);
+    REQUIRE(f.manager->getCurrentAudioDevice() != nullptr);
+    CHECK(f.manager->getCurrentAudioDevice()->getName() == "Fake Other"); // the fallback runs...
+    CHECK(f.state()["deviceStatus"]["status"].toString() == "Running");
+    auto saved = Settings::load(f.data.getChildFile("settings.json"));
+    CHECK(saved.audioDeviceName == "Fake Solo"); // ...but the preferred device is kept
+    CHECK(saved.outputFirstChannel == 1);
+    CHECK(f.ok("getSettings")["audioDeviceName"].toString() == "Fake Solo");
+
+    // A settings change that does not name a device keeps the preference too.
+    f.ok("setSettings", obj({ { "bufferSize", 256 } }));
+    saved = Settings::load(f.data.getChildFile("settings.json"));
+    CHECK(saved.audioDeviceName == "Fake Solo");
+    CHECK(saved.bufferSize == 256);
+
+    f.fakeType->addDevice("Fake Solo");
+    f.fakeType->notifyDeviceListChanged();
+    f.manager->sendSynchronousChangeMessage();
+    auto* dev = f.manager->getCurrentAudioDevice();
+    REQUIRE(dev != nullptr);
+    CHECK(dev->getName() == "Fake Solo");
+    CHECK(dev->getActiveOutputChannels() == juce::BigInteger(2)); // the saved output channel, not the fallback's 0
+    CHECK(f.state()["deviceStatus"]["status"].toString() == "Running");
+}
+
+TEST_CASE("bridge: setSettings retries opening the device when it is not running, even with unchanged fields")
+{
+    Fixture f;
+    saveFakeSoloSettings(f);
+    f.start(true, true);
+    f.fakeType->failOpen = true;
+    f.engine->startAudio(true);
+    CHECK(f.state()["deviceStatus"]["status"].toString() == "NoDevice");
+
+    f.fakeType->failOpen = false;
+    f.ok("setSettings", obj({ { "audioDeviceName", "Fake Solo" } })); // same value as before
+    REQUIRE(f.state()["deviceStatus"]["status"].toString() == "Running");
+    CHECK(f.manager->getCurrentAudioDevice()->getName() == "Fake Solo");
 }

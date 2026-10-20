@@ -92,7 +92,14 @@ Settings Settings::load(const juce::File& file)
 
     auto root = juce::JSON::parse(file.loadFileAsString());
     if (!root.getDynamicObject())
+    {
+        // Keep the unreadable bytes (the caller writes defaults over the file): settings.json.corrupt, .corrupt.2, ...
+        auto kept = file.getSiblingFile(file.getFileName() + ".corrupt");
+        for (int n = 2; kept.exists(); ++n)
+            kept = file.getSiblingFile(file.getFileName() + ".corrupt." + juce::String(n));
+        file.copyFileTo(kept);
         return s;
+    }
 
     s.audioDeviceType = readString(root, "audioDeviceType", s.audioDeviceType);
     s.audioDeviceName = readString(root, "audioDeviceName", s.audioDeviceName);

@@ -92,11 +92,36 @@ PluginNode::PluginNode(std::unique_ptr<juce::AudioPluginInstance> p, juce::File 
 
 PluginNode::~PluginNode()
 {
+    setOnEdited(nullptr);
     // Teardown calls into the plugin too: a crash here must blacklist it like a crash on load.
     const ScopedCrashMarker guard(crashMarker, pluginId);
     if (prepared)
         plugin->releaseResources();
     plugin.reset();
+}
+
+void PluginNode::setOnEdited(std::function<void()> fn)
+{
+    const bool wasListening = onEdited != nullptr;
+    onEdited = std::move(fn);
+    if (onEdited != nullptr && ! wasListening)
+        plugin->addListener(this);
+    else if (onEdited == nullptr && wasListening)
+        plugin->removeListener(this);
+    cancelPendingUpdate();
+}
+
+void PluginNode::audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details)
+{
+    // Latency or parameter-info updates are not edits; a program or non-parameter state change is.
+    if (details.programChanged || details.nonParameterStateChanged)
+        triggerAsyncUpdate();
+}
+
+void PluginNode::handleAsyncUpdate()
+{
+    if (onEdited)
+        onEdited();
 }
 
 void PluginNode::prepare(const ProcessSpec& spec)

@@ -96,11 +96,16 @@ CommandResult Engine::setSettings(const SettingsPatch& p)
     set(settings.bufferSize, p.bufferSize);
     set(settings.sampleRate, p.sampleRate);
 
+    // A device field that changed reopens the device; so does any device field while the device is not running or a
+    // fallback stands in for the preferred device (a retry, even with unchanged values).
+    const bool deviceFieldGiven = p.audioDeviceType || p.audioDeviceName || p.inputChannel || p.outputFirstChannel
+                                  || p.bufferSize || p.sampleRate;
     juce::Result deviceResult = juce::Result::ok();
-    if (deviceChanged && audio)
+    if (audio && (deviceChanged || (deviceFieldGiven && (audio->status() != DeviceStatus::Running || ! audio->usingPreferred()))))
     {
         deviceResult = audio->apply(settings); // a successful (re)open rebuilds the plan via onDeviceRestarted
-        audio->writeBack(settings);
+        if (audio->usingPreferred() || settings.audioDeviceName.isEmpty()) // a fallback never replaces the choice
+            audio->writeBack(settings);
     }
     if (p.watchedFolders)
     {

@@ -118,3 +118,20 @@ TEST_CASE("settings: out-of-range numbers and malformed mappings are rejected")
     REQUIRE(s.globalMappings.size() == 1);
     REQUIRE(s.globalMappings[0].control == "footswitch:L");
 }
+
+TEST_CASE("settings: a corrupt file is kept as settings.json.corrupt")
+{
+    TempDir t;
+    auto f = t.dir.getChildFile("settings.json");
+    f.replaceWithText("{ not json at all");
+    REQUIRE(amp::Settings::load(f).bufferSize == 128);
+    const auto kept = t.dir.getChildFile("settings.json.corrupt");
+    REQUIRE(kept.existsAsFile());
+    REQUIRE(kept.loadFileAsString() == "{ not json at all");
+
+    // A second corrupt file does not overwrite the first copy.
+    f.replaceWithText("[1,2,3]");
+    amp::Settings::load(f);
+    REQUIRE(kept.loadFileAsString() == "{ not json at all");
+    REQUIRE(t.dir.getChildFile("settings.json.corrupt.2").loadFileAsString() == "[1,2,3]");
+}

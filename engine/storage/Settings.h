@@ -27,7 +27,8 @@ struct Settings
     std::map<int, juce::String> footswitchKeys { { 0x04, "footswitch:L" }, { 0x05, "footswitch:M" }, { 0x06, "footswitch:R" },
                                                  { 0x68, "footswitch:L" }, { 0x69, "footswitch:M" }, { 0x6A, "footswitch:R" } };
 
-    /** Missing/corrupt file -> defaults. Missing keys or wrong-typed values -> that field's default. */
+    /** Missing/corrupt file -> defaults; a corrupt file is first copied to settings.json.corrupt (.corrupt.2, ... when
+        that exists). Missing keys or wrong-typed values -> that field's default. */
     static Settings load(const juce::File&);
     /** Atomic (temp file in the same directory + rename). */
     bool save(const juce::File&) const;

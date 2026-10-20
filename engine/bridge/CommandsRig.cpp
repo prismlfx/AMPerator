@@ -58,23 +58,37 @@ CommandResult Engine::newRig(const juce::String& name, const juce::String& band)
     return CommandResult::success(json::object({ { "id", doc.id } }));
 }
 
-CommandResult Engine::saveRig(const juce::String& name, const juce::String& band)
+CommandResult Engine::saveRig(const juce::String& name, const juce::String& band, bool asNew)
 {
     if (! live)
         return CommandResult::failure("no rig loaded");
     auto doc = currentDoc();
+    const auto previousId = doc.id;
+    if (asNew)
+        doc.id = juce::Uuid().toString();
     if (name.trim().isNotEmpty())
         doc.name = name.trim();
     if (band.trim().isNotEmpty())
         doc.band = band.trim();
     if (const auto r = store.save(doc); r.failed())
         return CommandResult::failure(r.getErrorMessage());
+    if (asNew)
+    {
+        // The copy keeps the original's user images (Art/user-art.json is keyed "<rigId>/<nodeId>").
+        auto* entries = userArt.getDynamicObject();
+        for (const auto& n : doc.nodes)
+            if (const auto image = userArt[juce::Identifier(previousId + "/" + n.id)]; image.isString())
+                entries->setProperty(juce::Identifier(doc.id + "/" + n.id), image);
+        writeFileAtomically(artDir().getChildFile("user-art.json"), juce::JSON::toString(userArt));
+    }
     live->doc = doc;
     saved = true;
     settings.lastRigId = doc.id;
     settings.noteRecent(doc.id);
     saveSettings();
     dirty = false;
+    if (asNew)
+        emitRigLoaded(); // another rig id: the UI picks it up from rigLoaded
     bridge().emit("rigDirty", json::object({ { "dirty", false } }));
     return CommandResult::success(json::object({ { "id", doc.id }, { "name", doc.name }, { "band", doc.band } }));
 }

@@ -122,7 +122,23 @@ juce::AudioIODeviceType* AudioIO::findType(const Settings& s) const
 
 juce::Result AudioIO::apply(const Settings& s)
 {
+    preferred = s;
+    onFallback = s.audioDeviceName.isNotEmpty(); // until the named device actually opens
     return applyInternal(s, false);
+}
+
+bool AudioIO::usingPreferred() const
+{
+    return deviceRunning() && ! onFallback && preferred.audioDeviceName.isNotEmpty()
+        && manager.getCurrentAudioDevice()->getName() == preferred.audioDeviceName;
+}
+
+bool AudioIO::isListed(const juce::String& deviceName) const
+{
+    for (auto* t : manager.getAvailableDeviceTypes())
+        if (t->getDeviceNames(false).contains(deviceName) || t->getDeviceNames(true).contains(deviceName))
+            return true;
+    return false;
 }
 
 juce::Result AudioIO::applyInternal(const Settings& s, bool reconnecting)
@@ -206,6 +222,7 @@ juce::Result AudioIO::applyInternal(const Settings& s, bool reconnecting)
     }
 
     setWanted(true, name);
+    onFallback = usedFallback && preferred.audioDeviceName.isNotEmpty();
     wanted = s;
     wanted.audioDeviceType = type->getTypeName();
     wanted.audioDeviceName = name;
@@ -311,7 +328,20 @@ juce::StringArray AudioIO::outputChannelNames() const
 
 void AudioIO::changeListenerCallback(juce::ChangeBroadcaster*)
 {
-    if (applying || ! hasWanted)
+    if (applying)
+        return;
+
+    // A fallback is running (or nothing could be opened): switch to the preferred device once it is listed again.
+    if ((onFallback || ! hasWanted) && preferred.audioDeviceName.isNotEmpty()
+        && isListed(preferred.audioDeviceName)) // any type: findType() picks the one that lists it
+    {
+        auto* current = manager.getCurrentAudioDevice();
+        if (current == nullptr || current->getName() != preferred.audioDeviceName || ! deviceRunning())
+            if (applyInternal(Settings(preferred), true).wasOk())
+                return;
+    }
+
+    if (! hasWanted)
         return;
 
     auto* d = manager.getCurrentAudioDevice();
@@ -332,6 +362,8 @@ void AudioIO::changeListenerCallback(juce::ChangeBroadcaster*)
     {
         // Someone switched devices outside apply(): adopt what is running instead of fighting it.
         writeBack(wanted);
+        preferred = wanted;
+        onFallback = false;
         setWanted(true, wanted.audioDeviceName);
         wantedInput = wanted.inputChannel;
         wantedOutputFirst = wanted.outputFirstChannel;

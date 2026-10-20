@@ -16,12 +16,18 @@ namespace amp
 // Mono-input plugins read channel 0. process() does not allocate (plugins with more than 2 channels get
 // preallocated scratch channels, cleared every block). isStereo() = main output bus has >= 2 channels.
 // The first prepare() and teardown are crash-marker guarded; a repeat prepare() releases resources first.
-class PluginNode : public ProcessorNode
+class PluginNode : public ProcessorNode, private juce::AudioProcessorListener, private juce::AsyncUpdater
 {
 public:
     PluginNode(std::unique_ptr<juce::AudioPluginInstance>, juce::File crashMarker, juce::String pluginId);
     ~PluginNode() override;
 
+    /** Message thread. Non-null: from now on, edits made in the plugin (a parameter change, or a program / state change
+        the plugin reports) call `fn` on the message thread, coalesced. Earlier changes (e.g. setState() while the rig
+        was built) are dropped. Null: stop listening (pending notifications are dropped). */
+    void setOnEdited(std::function<void()> fn);
+    /** Test support: delivers a pending edit notification now instead of on the message loop. */
+    void dispatchPendingEdit() { handleUpdateNowIfNeeded(); }
     void prepare(const ProcessSpec&) override;
     void process(juce::AudioBuffer<float>& io, int numSamples) override;
     bool isStereo() const override;
@@ -32,7 +38,13 @@ public:
     juce::AudioPluginInstance* instance() const { return plugin.get(); }
 
 private:
+    // Any thread (plugins may report from their audio or UI threads); triggerAsyncUpdate does not allocate.
+    void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override { triggerAsyncUpdate(); }
+    void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails&) override;
+    void handleAsyncUpdate() override;
+
     std::unique_ptr<juce::AudioPluginInstance> plugin;
+    std::function<void()> onEdited;
     juce::File crashMarker;
     juce::String pluginId;
     bool everPrepared = false;

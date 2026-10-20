@@ -150,7 +150,7 @@ TEST_CASE("rig_store: renaming a rig's band moves the file")
     REQUIRE(newFile.getSiblingFile("Tone.amprig.bak.1").existsAsFile());
     REQUIRE(store.list().size() == 1);
     REQUIRE(store.load(r.id).rig->band == "New Band");
-    REQUIRE(store.backups(r.id).size() == 1);
+    REQUIRE(store.backups(r.id).size() == 2); // the moved backup + the version saved before the move
 }
 
 TEST_CASE("rig_store: renaming a rig moves the file")
@@ -169,6 +169,7 @@ TEST_CASE("rig_store: remove deletes file and backups")
 {
     TempDir t;
     amp::RigStore store(t.dir);
+    store.setTrashFunction([](const juce::File& f) { return f.deleteFile(); }); // not the user's Trash
     auto r = rig("Tone");
     REQUIRE(store.save(r).wasOk());
     REQUIRE(store.save(r).wasOk());
@@ -317,4 +318,106 @@ TEST_CASE("rig_store: fresh store finds a corrupt rig and its backups through th
     REQUIRE(backups.size() == 1);
     CHECK(backups[0] == file.getSiblingFile("Fragile.amprig.bak.1"));
     CHECK(file.loadFileAsString() == "{ broken");
+}
+
+TEST_CASE("rig_store: saving under a new name keeps the previous version as a backup")
+{
+    TempDir t;
+    amp::RigStore store(t.dir);
+    auto r = rig("A", "Band");
+    r.tags.add("tone1");
+    REQUIRE(store.save(r).wasOk());
+    const auto oldFile = t.dir.getChildFile("Rigs/Band/A.amprig");
+    const auto oldText = oldFile.loadFileAsString();
+
+    r.name = "B";
+    r.band = "Other";
+    r.tags = { "tone2" };
+    REQUIRE(store.save(r).wasOk());
+    const auto newFile = t.dir.getChildFile("Rigs/Other/B.amprig");
+    REQUIRE(newFile.existsAsFile());
+    REQUIRE_FALSE(oldFile.existsAsFile());
+    REQUIRE(amp::parseRig(newFile.loadFileAsString()).rig->tags == juce::StringArray { "tone2" });
+    const auto bak1 = newFile.getSiblingFile("B.amprig.bak.1");
+    REQUIRE(bak1.existsAsFile());
+    REQUIRE(bak1.loadFileAsString() == oldText);
+    auto backups = store.backups(r.id);
+    REQUIRE(backups.size() == 1);
+    REQUIRE(backups.front() == bak1);
+}
+
+TEST_CASE("rig_store: a rename keeps at most five backups, the previous version newest")
+{
+    TempDir t;
+    amp::RigStore store(t.dir);
+    auto r = rig("A");
+    for (int i = 0; i < 7; ++i) // 6 backups' worth: the store keeps 5
+    {
+        r.tags = { "v" + juce::String(i) };
+        REQUIRE(store.save(r).wasOk());
+    }
+    r.name = "Renamed";
+    r.tags = { "v7" };
+    REQUIRE(store.save(r).wasOk());
+    auto backups = store.backups(r.id);
+    REQUIRE(backups.size() == 5);
+    REQUIRE(amp::parseRig(backups.front().loadFileAsString()).rig->tags == juce::StringArray { "v6" });
+    REQUIRE(amp::parseRig(backups.back().loadFileAsString()).rig->tags == juce::StringArray { "v2" });
+    REQUIRE_FALSE(t.dir.getChildFile("Rigs/My Tones/Renamed.amprig.bak.6").exists());
+}
+
+TEST_CASE("rig_store: a Finder copy with the same id gets a fresh id and both rigs list")
+{
+    TempDir t;
+    amp::RigStore store(t.dir);
+    auto r = rig("Lead", "Band");
+    REQUIRE(store.save(r).wasOk());
+    const auto original = t.dir.getChildFile("Rigs/Band/Lead.amprig");
+    const auto copy = t.dir.getChildFile("Rigs/Band/Lead copy.amprig");
+    REQUIRE(original.copyFileTo(copy));
+
+    amp::RigStore fresh(t.dir); // a new launch: nothing cached
+    auto entries = fresh.list();
+    REQUIRE(entries.size() == 2);
+    REQUIRE(entries[0].id != entries[1].id);
+    auto parsedOriginal = amp::parseRig(original.loadFileAsString()).rig;
+    auto parsedCopy = amp::parseRig(copy.loadFileAsString()).rig;
+    REQUIRE(parsedOriginal->id == r.id); // the older file keeps its id
+    REQUIRE(parsedCopy->id != r.id);     // the copy was rewritten with a fresh one
+    REQUIRE(parsedCopy->name == "Lead");
+    REQUIRE(fresh.load(parsedCopy->id).rig.has_value());
+    REQUIRE(fresh.load(r.id).rig->id == r.id);
+    REQUIRE(fresh.list().size() == 2); // stable on the next scan
+}
+
+TEST_CASE("rig_store: dotfiles neither keep a band folder alive nor become bands")
+{
+    TempDir t;
+    amp::RigStore store(t.dir);
+    auto r = rig("Solo", "Old Band");
+    REQUIRE(store.save(r).wasOk());
+    REQUIRE(t.dir.getChildFile("Rigs/Old Band/.DS_Store").replaceWithText("x"));
+    REQUIRE(t.dir.getChildFile("Rigs/.hidden").createDirectory());
+
+    r.band = "New Band";
+    REQUIRE(store.save(r).wasOk());
+    REQUIRE_FALSE(t.dir.getChildFile("Rigs/Old Band").exists());
+    REQUIRE_FALSE(store.bands().contains(".hidden"));
+    REQUIRE_FALSE(store.bands().contains("Old Band"));
+}
+
+TEST_CASE("rig_store: remove hands the rig file and its backups to the trash function")
+{
+    TempDir t;
+    amp::RigStore store(t.dir);
+    const auto bin = t.dir.getChildFile("bin");
+    REQUIRE(bin.createDirectory());
+    store.setTrashFunction([&](const juce::File& f) { return f.moveFileTo(bin.getChildFile(f.getFileName())); });
+    auto r = rig("Gone");
+    REQUIRE(store.save(r).wasOk());
+    REQUIRE(store.save(r).wasOk()); // one backup
+    REQUIRE(store.remove(r.id).wasOk());
+    REQUIRE_FALSE(t.dir.getChildFile("Rigs/My Tones/Gone.amprig").exists());
+    REQUIRE(bin.getChildFile("Gone.amprig").existsAsFile());
+    REQUIRE(bin.getChildFile("Gone.amprig.bak.1").existsAsFile());
 }

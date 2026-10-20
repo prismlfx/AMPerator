@@ -19,6 +19,7 @@ import { mountLearnOverlay, renderEdit } from './views/edit';
 import { renderStage } from './views/stage';
 import { onLibraryToggle, renderLibrary, toggleLibrary } from './views/library';
 import { openSettings } from './views/settings';
+import { saveRigAs, watchQuitRequests } from './rigActions';
 
 const app = document.getElementById('app')!;
 
@@ -32,6 +33,8 @@ const nameInput = el('input', { class: 'rig-name-input', type: 'text', 'aria-lab
 const bandList = el('datalist', { id: 'band-names' });
 const dirtyDot = el('span', { class: 'dirty', role: 'status' });
 const saveButton = el('button', { class: 'button primary small', title: 'Save (⌘S)' }, 'Save');
+const saveAsButton = el('button', { class: 'button small', title: 'Save a copy as a new rig (⇧⌘S)' }, 'Save as…');
+saveAsButton.addEventListener('click', () => void saveRigAs());
 const deviceChip = el('div', { class: 'device-chip' });
 const stageButton = el('button', { class: 'segment', 'aria-pressed': 'false' }, 'Stage');
 const editButton = el('button', { class: 'segment', 'aria-pressed': 'false' }, 'Edit');
@@ -55,6 +58,7 @@ app.append(
     libraryButton,
     el('div', { class: 'rig-fields' }, bandInput, el('span', { class: 'rig-sep', 'aria-hidden': 'true' }, '›'), nameInput, dirtyDot, bandList),
     saveButton,
+    saveAsButton,
     el('div', { class: 'spacer' }),
     deviceChip,
     el('div', { class: 'segmented', role: 'group', 'aria-label': 'View' }, stageButton, editButton),
@@ -72,6 +76,7 @@ function syncRigFields(s: AppState) {
   const rig = s.rig;
   for (const i of [bandInput, nameInput]) i.disabled = !rig;
   saveButton.disabled = !rig;
+  saveAsButton.disabled = !rig;
   if (!rig) {
     bandInput.value = nameInput.value = '';
     dirtyDot.textContent = '';
@@ -128,7 +133,7 @@ saveButton.addEventListener('click', () => void save());
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
     e.preventDefault();
-    void save();
+    void (e.shiftKey ? saveRigAs() : save());
   }
 });
 
@@ -196,6 +201,7 @@ store.subscribe(render);
 render(store.get());
 
 onToastableError((e) => toast(e.message ?? 'Unknown error'));
+watchQuitRequests();
 
 initStore().catch((e) => {
   connectionError = (e as Error).message;

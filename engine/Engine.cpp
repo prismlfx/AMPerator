@@ -69,6 +69,8 @@ Engine::Engine(Options o)
       mapping([this](const juce::String& id, std::optional<bool> set) { return applyBypass(id, set); })
 {
     bridgePtr = std::make_unique<Bridge>(*this);
+    if (o.trashFile)
+        store.setTrashFunction(std::move(o.trashFile));
 
     for (auto* sub : { "Models", "IRs", "Rigs", "Art" })
         libraryRoot.getChildFile(sub).createDirectory();
@@ -160,7 +162,8 @@ void Engine::openAudioDevice(bool permissionGranted)
     }
     if (const auto r = audio->apply(settings); r.failed())
         reportError("Could not open the audio device: " + r.getErrorMessage(), "audioDevice", {}, true);
-    audio->writeBack(settings);
+    if (audio->usingPreferred() || settings.audioDeviceName.isEmpty()) // never replace the user's choice by a fallback
+        audio->writeBack(settings);
 }
 
 void Engine::startAudio(bool permissionGranted)
@@ -176,6 +179,10 @@ Engine::~Engine()
 {
     if (live && beforeNodesReplaced)
         beforeNodesReplaced(false);
+    if (live)
+        for (const auto& pn : live->plan->nodes())
+            if (auto* node = dynamic_cast<PluginNode*>(pn->node.get()))
+                node->setOnEdited(nullptr);
     meterTimer.stopTimer();
     tunerTimer.stopTimer();
     statusTimer.stopTimer();
@@ -216,6 +223,7 @@ juce::String Engine::installRig(const RigDocument& doc, bool isSaved, bool isStr
     replaceLive(std::move(*built), isStructuralEdit);
     refreshMappings();
     snapshotPluginEditors(); // before rigLoaded, which carries the snapshots
+    watchPluginEdits();
     if (isStructuralEdit)
     {
         emitRigLoaded();
@@ -263,13 +271,57 @@ void Engine::rebuildForDevice(double sampleRate, int bufferSize)
         return;
     }
     replaceLive(std::move(*built), true);
+    watchPluginEdits();
 }
 
 void Engine::replaceLive(LiveRig&& next, bool sameRig)
 {
     if (live && beforeNodesReplaced)
         beforeNodesReplaced(sameRig); // the app closes plugin editors while their instances still exist
+    if (live) // the old nodes may outlive this in the retire queue: they must not report edits any more
+        for (const auto& pn : live->plan->nodes())
+            if (auto* node = dynamic_cast<PluginNode*>(pn->node.get()))
+                node->setOnEdited(nullptr);
     live = std::move(next);
+}
+
+void Engine::watchPluginEdits()
+{
+    for (const auto& pn : live->plan->nodes())
+        if (auto* node = dynamic_cast<PluginNode*>(pn->node.get()))
+            node->setOnEdited([this] { setDirty(true); });
+}
+
+void Engine::dispatchPendingPluginChanges()
+{
+    if (live)
+        for (const auto& pn : live->plan->nodes())
+            if (auto* node = dynamic_cast<PluginNode*>(pn->node.get()))
+                node->dispatchPendingEdit();
+}
+
+bool Engine::requestQuit()
+{
+    if (! dirty)
+        return true;
+    quitIsPending = true;
+    bridge().emit("quitRequested", json::object({ { "rigName", live ? live->doc.name : juce::String() } }));
+    return false;
+}
+
+CommandResult Engine::confirmQuit(const juce::String& action)
+{
+    if (action != "save" && action != "discard" && action != "cancel")
+        return CommandResult::failure("unknown action \"" + action + "\" (expected save, discard or cancel)");
+    quitIsPending = false;
+    if (action == "cancel")
+        return CommandResult::success();
+    if (action == "save")
+        if (auto r = saveRig(); ! r.ok)
+            return r; // stay: the UI shows why
+    if (onQuitConfirmed)
+        onQuitConfirmed();
+    return CommandResult::success();
 }
 
 void Engine::loadInitialRig()
