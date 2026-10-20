@@ -60,7 +60,7 @@ describe('store', () => {
     expect(s.connected).toBe(true);
     expect(s.rig?.name).toBe('Clean');
     expect(s.deviceStatus.latencyMs).toBe(8.1);
-    expect(s.view).toBe('edit');
+    expect(s.view).toBe('stage');
   });
 
   it('updates from events and notifies subscribers; unsubscribe stops them', async () => {

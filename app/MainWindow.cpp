@@ -25,6 +25,8 @@ juce::String mimeTypeFor(const juce::String& fileName)
     if (ext == "svg") return "image/svg+xml";
     if (ext == "png") return "image/png";
     if (ext == "jpg" || ext == "jpeg") return "image/jpeg";
+    if (ext == "gif") return "image/gif";
+    if (ext == "webp") return "image/webp";
     if (ext == "woff2") return "font/woff2";
     if (ext == "ico") return "image/x-icon";
     return "application/octet-stream";
@@ -51,6 +53,19 @@ std::optional<juce::WebBrowserComponent::Resource> uiResource(const juce::String
         return juce::WebBrowserComponent::Resource { std::move(bytes), mimeTypeFor(fileName) };
     }
     return std::nullopt;
+}
+
+/** Node art: "/art/<path>" serves an image from the library's Art/ folder (user images, plugin snapshots in
+    Art/cache/). Engine::artFileForRequest refuses anything outside Art/. */
+std::optional<juce::WebBrowserComponent::Resource> artResource(const Engine& engine, const juce::String& url)
+{
+    const auto file = engine.artFileForRequest(url.upToFirstOccurrenceOf("?", false, false).upToFirstOccurrenceOf("#", false, false));
+    juce::MemoryBlock data;
+    if (file == juce::File() || ! file.loadFileAsData(data))
+        return std::nullopt;
+    std::vector<std::byte> bytes(data.getSize());
+    std::memcpy(bytes.data(), data.getData(), bytes.size());
+    return juce::WebBrowserComponent::Resource { std::move(bytes), mimeTypeFor(file.getFileName()) };
 }
 
 bool useDevServer()
@@ -93,7 +108,12 @@ public:
                                           { handleBridgeMessage(args, std::move(complete)); })
                       .withNativeFunction("chooseFolder", [this](const juce::Array<juce::var>&, auto complete)
                                           { chooseFolder(std::move(complete)); })
-                      .withResourceProvider(uiResource))
+                      .withResourceProvider([&e](const juce::String& url)
+                                            {
+                                                return url.startsWith("/art/") ? artResource(e, url) : uiResource(url);
+                                            },
+                                            // the dev-server page loads art from the resource provider too
+                                            useDevServer() ? std::optional<juce::String>(devServerUrl) : std::nullopt))
     {
         addAndMakeVisible(browser);
 

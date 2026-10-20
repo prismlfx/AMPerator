@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120">
+  <rect x="41" y="44" width="5" height="10" rx="1" fill="#777"/>
+  <rect x="114" y="44" width="5" height="10" rx="1" fill="#777"/>
+  <rect x="45" y="6" width="70" height="108" rx="9" fill="#1f2a44" stroke="#3c4f7a" stroke-width="2"/>
+  <circle cx="66" cy="24" r="8" fill="#c9d3e6" stroke="#111" stroke-width="1"/><path d="M66 24v-6.5" stroke="#111" stroke-width="1.4" stroke-linecap="round"/><circle cx="94" cy="24" r="8" fill="#c9d3e6" stroke="#111" stroke-width="1"/><path d="M94 24v-6.5" stroke="#111" stroke-width="1.4" stroke-linecap="round"/>
+  <g fill="none" stroke="#9fb4dd" stroke-width="1.8"><path d="M80 60a6 6 0 0 1 0-12"/><path d="M80 64a10 10 0 0 1 0-20" opacity=".7"/><path d="M80 68a14 14 0 0 1 0-28" opacity=".45"/><path d="M80 60a6 6 0 0 0 0-12"/><path d="M80 64a10 10 0 0 0 0-20" opacity=".7"/><path d="M80 68a14 14 0 0 0 0-28" opacity=".45"/></g>
+  <circle cx="80" cy="76" r="3.2" fill="#6fa8ff"/>
+  <circle cx="80" cy="98" r="10" fill="#cfd3d8" stroke="#8b9097" stroke-width="2"/>
+  <circle cx="80" cy="98" r="5.5" fill="#e9ecef"/>
+</svg>

@@ -35,6 +35,34 @@ inline juce::File gCrashMarker;
 inline bool gMarkerDuringRelease = false;
 inline bool gMarkerDuringDestruction = false;
 
+// Editor of every fake plugin: none by default. Painted fills its bounds with a colour; Blank paints nothing
+// (like a native plugin view rendered offscreen). Tests set it with ScopedFakeEditor.
+enum class FakeEditorKind { None, Painted, Blank };
+inline FakeEditorKind gFakeEditor = FakeEditorKind::None;
+
+struct ScopedFakeEditor
+{
+    explicit ScopedFakeEditor(FakeEditorKind k) { gFakeEditor = k; }
+    ~ScopedFakeEditor() { gFakeEditor = FakeEditorKind::None; }
+};
+
+class FakeEditor final : public juce::AudioProcessorEditor
+{
+public:
+    FakeEditor(juce::AudioProcessor& p, bool paintedIn) : AudioProcessorEditor(p), painted(paintedIn) { setSize(200, 100); }
+    void paint(juce::Graphics& g) override
+    {
+        if (! painted)
+            return;
+        g.fillAll(juce::Colour(0xff2060c0));
+        g.setColour(juce::Colours::white);
+        g.fillEllipse(80.0f, 30.0f, 40.0f, 40.0f);
+    }
+
+private:
+    bool painted;
+};
+
 // Boilerplate shared by the fake plugins.
 class FakeBase : public juce::AudioPluginInstance
 {
@@ -49,8 +77,11 @@ public:
     double getTailLengthSeconds() const override { return 0.0; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
-    juce::AudioProcessorEditor* createEditor() override { return nullptr; }
-    bool hasEditor() const override { return false; }
+    juce::AudioProcessorEditor* createEditor() override
+    {
+        return gFakeEditor == FakeEditorKind::None ? nullptr : new FakeEditor(*this, gFakeEditor == FakeEditorKind::Painted);
+    }
+    bool hasEditor() const override { return gFakeEditor != FakeEditorKind::None; }
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram(int) override {}

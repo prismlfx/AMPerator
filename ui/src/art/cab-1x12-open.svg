@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120">
+  <defs>
+    <radialGradient id="cone" cx="50%" cy="45%" r="55%">
+      <stop offset="0" stop-color="#6b5a45"/>
+      <stop offset="0.35" stop-color="#2e271f"/>
+      <stop offset="1" stop-color="#17130f"/>
+    </radialGradient>
+    <pattern id="tweed" width="5" height="5" patternUnits="userSpaceOnUse">
+      <rect width="5" height="5" fill="#c9b07a"/>
+      <path d="M0 5L5 0" stroke="#9c8352" stroke-width="1.2"/>
+    </pattern>
+  </defs>
+  <path d="M112 20l14 -8v94l-14 8z" fill="#7a6440"/>
+  <path d="M116 22l6 -3.5v84l-6 3.5z" fill="#1a1612"/>
+  <rect x="34" y="20" width="78" height="94" rx="4" fill="url(#tweed)"/>
+  <path d="M34 20l14 -8h78l-14 8z" fill="#b39a66"/>
+  <rect x="40" y="26" width="66" height="82" rx="2" fill="#3a2f22"/>
+  <circle cx="73" cy="67" r="28" fill="url(#cone)" stroke="#5a4a36" stroke-width="2"/>
+  <circle cx="73" cy="67" r="7" fill="#7a6a55"/>
+</svg>

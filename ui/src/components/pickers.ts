@@ -3,15 +3,9 @@
 import { call } from '../bridge';
 import { confirmDialog, el, openModal, toast } from '../dialog';
 import { patchNode, type RigNode } from '../state';
+import { ARCHETYPES, archetypeLabel, artKind } from '../art/archetypes';
 
 const showError = (e: unknown) => toast((e as Error).message ?? String(e));
-
-/** Built-in art archetypes (spec §6; no brand names). The art itself arrives with the stage view. */
-const ARCHETYPES = {
-  amp: ['british-stack', 'american-clean-combo', 'high-gain-rectifier', 'ac-chime', 'generic'],
-  cab: ['4x12', '2x12', '1x12-open'],
-  pedal: ['drive', 'fuzz', 'delay', 'chorus', 'reverb', 'eq', 'gate', 'generic'],
-};
 
 interface Asset {
   file: string;
@@ -123,11 +117,11 @@ export function openPluginPicker(index: number) {
 
 /** `title` is the node title shown on its card. */
 export function openArtDialog(n: RigNode, title: string) {
-  const kind = n.type === 'NamAmp' ? 'amp' : n.type === 'CabIR' ? 'cab' : 'pedal';
+  const kind = artKind(n.type);
   const current = (n.art as { archetype?: string } | undefined)?.archetype ?? '';
   const modal = openModal(`Art for ${title}`, undefined, 'modal-small');
   const select = el('select', { 'aria-label': 'Built-in art' }, el('option', { value: '' }, 'Automatic'));
-  for (const a of ARCHETYPES[kind]) select.append(el('option', { value: a }, a));
+  for (const a of ARCHETYPES[kind]) select.append(el('option', { value: a }, archetypeLabel(a)));
   select.value = current;
   const save = el('button', { class: 'button primary' }, 'Save');
   const cancel = el('button', { class: 'button' }, 'Cancel');

@@ -94,7 +94,7 @@ export interface AppState {
 
 const initialState: AppState = {
   connected: false,
-  view: 'edit', // until the stage view exists (Task 19)
+  view: 'stage', // the app opens into stage mode
   rig: null,
   report: { missingAssets: [], missingPlugins: [], placeholderNodeIds: [], resolvedByFilename: [] },
   dirty: false,
@@ -157,6 +157,11 @@ export function rigSaved(name: string, band: string) {
 /** setNodeArt's reply (the engine announces no event for it). */
 export function patchNode(id: string, patch: Partial<RigNode>) {
   updateNode(id, (n) => ({ ...n, ...patch }));
+}
+
+/** After setTuner succeeded (the engine announces no event for it). */
+export function setTunerOn(tunerOn: boolean) {
+  if (current.tunerOn !== tunerOn) update({ tunerOn });
 }
 
 export function setSettings(settings: Partial<Settings>) {

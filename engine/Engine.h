@@ -95,6 +95,12 @@ public:
         handed to onOpenPluginEditor is destroyed after this returns, so the app must close their editors here. */
     std::function<void(bool sameRig)> beforeNodesReplaced;
 
+    /** The file the app's resource provider serves for a web view request `path` ("/art/<relative path>"): an
+        existing image (png, jpg, jpeg, gif, webp, svg) inside the library's Art/ folder. Anything else -- other
+        prefixes, "..", empty or absolute components, backslashes, symlinks, other file types -- gives File().
+        Thread-safe (reads only the library root). */
+    juce::File artFileForRequest(const juce::String& path) const;
+
     /** As if a footswitch/MIDI control produced `e` (test hook; also the path real controls take). */
     void injectControl(const ControlEvent& e);
     /** Spec the current plan was built with (test support). */
@@ -160,10 +166,11 @@ private:
     void pollTuner();
     void emitMeter();
 
-    // User art (Art/user-art.json, keyed "<rigId>/<nodeId>")
+    // Node art: user images (Art/user-art.json, keyed "<rigId>/<nodeId>") and plugin editor snapshots (Art/cache/)
     juce::File artDir() const;
     juce::String userImageFor(const juce::String& rigId, const juce::String& nodeId) const;
     juce::var artFor(const NodeDoc&) const;
+    void snapshotPluginEditors();
 
     const juce::File libraryRoot, dataDir;
     const bool audioEnabled, controlsEnabled;

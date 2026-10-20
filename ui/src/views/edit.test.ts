@@ -73,6 +73,20 @@ afterEach(() => {
 });
 
 describe('pedalboard', () => {
+  it('shows an art thumbnail on each card and offers the built-in art per kind', async () => {
+    const art = await import('../art/archetypes');
+    await started();
+    edit.renderEdit(root);
+    expect(card('amp').querySelector('img.card-art')!.getAttribute('src')).toBe(art.archetypeUrl('british-stack')); // "Plexi"
+    expect(card('cab').querySelector('img.card-art')!.getAttribute('src')).toBe(art.archetypeUrl('cab-4x12'));
+    expect(card('g').querySelector('img.card-art')!.getAttribute('src')).toBe(art.archetypeUrl('gate'));
+
+    card('cab').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 5, clientY: 5 }));
+    menuItem('Set art…').click();
+    const options = [...document.querySelectorAll<HTMLOptionElement>('.modal select option')].map((o) => o.value);
+    expect(options).toEqual(['', ...art.ARCHETYPES.cab]);
+  });
+
   it('renders nodes in chain order excluding in/out', async () => {
     await started();
     edit.renderEdit(root);

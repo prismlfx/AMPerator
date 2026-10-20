@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120">
+  <defs>
+    <pattern id="plate" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#b8bcc2"/>
+      <path d="M1 3l2-2M5 7l2-2" stroke="#e6e9ee" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M5 3l2-2M1 7l2-2" stroke="#8a8f97" stroke-width="1" stroke-linecap="round"/>
+    </pattern>
+    <pattern id="mesh" width="3" height="3" patternUnits="userSpaceOnUse">
+      <rect width="3" height="3" fill="#121212"/>
+      <circle cx="1.5" cy="1.5" r="0.7" fill="#2c2c2c"/>
+    </pattern>
+  </defs>
+  <rect x="30" y="4" width="100" height="34" rx="3" fill="#0e0e0e"/>
+  <rect x="34" y="8" width="92" height="14" rx="1.5" fill="url(#plate)"/>
+  <g fill="#111"><circle cx="46" cy="15" r="3.2"/><circle cx="57" cy="15" r="3.2"/><circle cx="68" cy="15" r="3.2"/><circle cx="79" cy="15" r="3.2"/><circle cx="90" cy="15" r="3.2"/><circle cx="101" cy="15" r="3.2"/><circle cx="112" cy="15" r="3.2"/></g>
+  <rect x="34" y="25" width="92" height="9" rx="1" fill="url(#mesh)"/>
+  <rect x="28" y="40" width="104" height="76" rx="3" fill="#0e0e0e"/>
+  <rect x="33" y="45" width="94" height="10" rx="1" fill="url(#plate)"/>
+  <rect x="33" y="58" width="94" height="53" rx="2" fill="url(#mesh)"/>
+  <g fill="none" stroke="#262626" stroke-width="2"><circle cx="57" cy="84" r="18"/><circle cx="103" cy="84" r="18"/></g>
+  <g fill="#c9ccd1"><rect x="28" y="40" width="6" height="6" rx="1"/><rect x="126" y="40" width="6" height="6" rx="1"/><rect x="28" y="110" width="6" height="6" rx="1"/><rect x="126" y="110" width="6" height="6" rx="1"/></g>
+</svg>

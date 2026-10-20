@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120">
+  <defs>
+    <radialGradient id="cone" cx="50%" cy="45%" r="55%">
+      <stop offset="0" stop-color="#5a5a5a"/>
+      <stop offset="0.35" stop-color="#262626"/>
+      <stop offset="1" stop-color="#121212"/>
+    </radialGradient>
+  </defs>
+  <rect x="6" y="22" width="148" height="76" rx="4" fill="#2a2a2a"/>
+  <rect x="12" y="28" width="136" height="64" rx="2" fill="#1a1a1a"/>
+  <g fill="url(#cone)" stroke="#3a3a3a" stroke-width="2"><circle cx="48" cy="60" r="26"/><circle cx="112" cy="60" r="26"/></g>
+  <g fill="#6a6a6a"><circle cx="48" cy="60" r="6"/><circle cx="112" cy="60" r="6"/></g>
+  <g fill="#8a8a8a"><rect x="6" y="22" width="7" height="7" rx="1"/><rect x="147" y="22" width="7" height="7" rx="1"/><rect x="6" y="91" width="7" height="7" rx="1"/><rect x="147" y="91" width="7" height="7" rx="1"/></g>
+</svg>

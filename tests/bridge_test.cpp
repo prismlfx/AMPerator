@@ -667,3 +667,74 @@ TEST_CASE("bridge: openPluginEditor hands the live plugin instance and node id t
     CHECK(opened->getName() == "FakeGain");
     CHECK(openedId == id);
 }
+
+TEST_CASE("bridge: rigLoaded includes art.archetype for nodes that set it")
+{
+    Fixture f;
+    const auto amp = f.nodeOfType("NamAmp");
+    f.ok("setNodeArt", obj({ { "id", amp }, { "archetype", "high-gain-rectifier" } }));
+    f.ok("moveNode", obj({ { "id", f.nodeOfType("Gate") }, { "index", 2 } })); // structural: rigLoaded
+
+    for (auto& n : *f.lastEvent("rigLoaded")["rig"]["nodes"].getArray())
+    {
+        INFO(juce::JSON::toString(n, true));
+        const auto art = n["art"];
+        REQUIRE(art.isObject());
+        CHECK(art["archetype"].toString() == (n["id"].toString() == amp ? "high-gain-rectifier" : ""));
+        CHECK(art.hasProperty("image"));
+        CHECK(art.hasProperty("snapshot"));
+        CHECK(art["snapshot"].toString().isEmpty()); // no plugin nodes here
+    }
+}
+
+TEST_CASE("bridge: plugin nodes carry a cached editor snapshot in their art")
+{
+    Fixture f;
+    const amp_test::ScopedFakeEditor editor(amp_test::FakeEditorKind::Painted);
+    f.ok("rescanPlugins");
+    juce::var gain;
+    for (auto& p : *f.ok("listPlugins")["plugins"].getArray())
+        if (p["name"].toString() == "FakeGain")
+            gain = p;
+    REQUIRE(gain.isObject());
+    const auto id = f.ok("addNode", obj({ { "type", "Plugin" }, { "index", 0 }, { "plugin", gain } }))["id"].toString();
+
+    juce::String snapshot;
+    for (auto& n : *f.lastEvent("rigLoaded")["rig"]["nodes"].getArray())
+        if (n["id"].toString() == id)
+            snapshot = n["art"]["snapshot"].toString();
+    const juce::File png(snapshot);
+    REQUIRE(png.existsAsFile());
+    CHECK(png.getParentDirectory() == f.lib.getChildFile("Art").getChildFile("cache"));
+    // ...and the web view can fetch it through the art resource path.
+    CHECK(f.engine->artFileForRequest("/art/cache/" + png.getFileName()) == png);
+}
+
+TEST_CASE("bridge: art requests resolve only to images inside Art/")
+{
+    Fixture f;
+    const auto art = f.lib.getChildFile("Art");
+    REQUIRE(art.getChildFile("photo 1.png").replaceWithText("png"));
+    REQUIRE(art.getChildFile("cache").getChildFile("p.png").create());
+    REQUIRE(f.lib.getChildFile("secret.png").replaceWithText("x"));
+    REQUIRE(f.data.getChildFile("settings.json").existsAsFile());
+
+    CHECK(f.engine->artFileForRequest("/art/photo 1.png") == art.getChildFile("photo 1.png"));
+    CHECK(f.engine->artFileForRequest("/art/cache/p.png") == art.getChildFile("cache").getChildFile("p.png"));
+
+    for (auto bad : { "/art/../secret.png", "/art/cache/../../secret.png", "/art/..", "/art/", "/art",
+                      "/art/user-art.json", "/art/missing.png", "/art//etc/passwd", "/art/~/x.png",
+                      "/secret.png", "/art/..\\secret.png", "/art/C:/x.png", "/index.html" })
+    {
+        INFO(bad);
+        CHECK(f.engine->artFileForRequest(bad) == juce::File());
+    }
+
+    // A symlink inside Art/ must not lead outside it.
+    const auto link = art.getChildFile("link.png");
+    REQUIRE(f.lib.getChildFile("secret.png").createSymbolicLink(link, true));
+    CHECK(f.engine->artFileForRequest("/art/link.png") == juce::File());
+    const auto dirLink = art.getChildFile("outside");
+    REQUIRE(f.lib.createSymbolicLink(dirLink, true));
+    CHECK(f.engine->artFileForRequest("/art/outside/secret.png") == juce::File());
+}

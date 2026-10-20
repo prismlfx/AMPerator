@@ -14,9 +14,9 @@ import {
   setView,
   store,
   type AppState,
-  type RigNode,
 } from './state';
 import { mountLearnOverlay, renderEdit } from './views/edit';
+import { renderStage } from './views/stage';
 import { onLibraryToggle, renderLibrary, toggleLibrary } from './views/library';
 import { openSettings } from './views/settings';
 
@@ -148,7 +148,6 @@ function render(s: AppState) {
   stageRoot.hidden = s.view !== 'stage';
 
   renderBanners(s);
-  if (s.view === 'stage') renderStagePlaceholder(s);
 }
 
 function renderBanners(s: AppState) {
@@ -189,36 +188,7 @@ function banner(text: string, onDismiss?: () => void, action?: HTMLElement) {
   return b;
 }
 
-// Placeholder until the stage view exists (Task 19): the current rig's signal chain.
-function renderStagePlaceholder(s: AppState) {
-  if (!s.connected) {
-    stageRoot.replaceChildren(el('p', { class: 'muted center' }, connectionError ? '' : 'Connecting to the engine…'));
-    return;
-  }
-  if (!s.rig) {
-    stageRoot.replaceChildren(el('p', { class: 'muted center' }, 'No rig loaded.'));
-    return;
-  }
-  stageRoot.replaceChildren(
-    el('h1', { class: 'stage-rig-name' }, s.rig.name),
-    el(
-      'ol',
-      { class: 'chain' },
-      ...s.rig.nodes.map((n) =>
-        el('li', { class: `chain-node${n.bypass ? ' bypassed' : ''}${s.report.placeholderNodeIds.includes(n.id) ? ' placeholder' : ''}` }, nodeLabel(n)),
-      ),
-    ),
-  );
-}
-
-function nodeLabel(n: RigNode): string {
-  const plugin = n.plugin as { name?: string } | undefined;
-  const asset = n.asset as { file?: string } | undefined;
-  if (plugin?.name) return plugin.name;
-  if (asset?.file) return `${n.type}: ${asset.file.split('/').pop()!.replace(/\.[^.]+$/, '')}`;
-  return n.type;
-}
-
+renderStage(stageRoot);
 renderEdit(editRoot);
 mountLearnOverlay(app);
 renderLibrary(libraryPanel);

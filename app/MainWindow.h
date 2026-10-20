@@ -20,7 +20,8 @@ class PluginWindows;
 
     The page is served from the embedded ui/dist (binary data) through the resource provider; in Debug builds the
     environment variable AMP_UI_DEV=1 loads the Vite dev server at http://localhost:5173 instead (cd ui && npm run
-    dev). Navigation is restricted to those origins and pages cannot open new windows.
+    dev). Navigation is restricted to those origins and pages cannot open new windows. The resource provider also
+    serves node art: "/art/<path>" maps to an image inside the library's Art/ folder (Engine::artFileForRequest).
 
     Plugin editors (Engine::onOpenPluginEditor) open in PluginWindows owned here; Engine::beforeNodesReplaced
     closes them before the engine destroys the plugin instances. Destroy this window before the Engine. */

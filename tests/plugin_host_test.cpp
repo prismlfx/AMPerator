@@ -292,3 +292,72 @@ TEST_CASE("plugin_host: plugin teardown runs under the crash marker")
     REQUIRE_FALSE(gCrashMarker.exists());
     gCrashMarker = juce::File();
 }
+
+namespace
+{
+struct SnapshotFixture : Fixture
+{
+    std::unique_ptr<amp::PluginHost> host = makeHost();
+    juce::File cache = dir.getChildFile("Art").getChildFile("cache");
+    amp::PluginRef ref;
+    std::unique_ptr<amp::ProcessorNode> node;
+
+    SnapshotFixture()
+    {
+        host->scan([](float) {});
+        ref = amp::PluginHost::refFor(*findByName(host->available(), "FakeGain"));
+        juce::String error;
+        node = host->create(ref, spec, error);
+        REQUIRE(node != nullptr);
+    }
+    juce::AudioPluginInstance& instance() const { return *dynamic_cast<amp::PluginNode&>(*node).instance(); }
+};
+} // namespace
+
+TEST_CASE("plugin_host: snapshotEditor caches a PNG of a painted editor")
+{
+    SnapshotFixture f;
+    const ScopedFakeEditor editor(FakeEditorKind::Painted);
+
+    const auto png = f.host->snapshotEditor(f.instance(), f.ref.uid, f.cache);
+    REQUIRE(png.existsAsFile());
+    CHECK(png == amp::PluginHost::snapshotFile(f.cache, f.ref.uid));
+    CHECK(png.getParentDirectory() == f.cache);
+    CHECK(png.hasFileExtension("png"));
+    const auto image = juce::ImageFileFormat::loadFrom(png);
+    REQUIRE(image.isValid());
+    CHECK(image.getWidth() == 200);
+    CHECK(image.getPixelAt(5, 5).getARGB() == 0xff2060c0);
+    CHECK(f.instance().getActiveEditor() == nullptr);              // the offscreen editor is gone again
+    CHECK_FALSE(f.dir.getChildFile("crash-marker").exists());       // guarded like every plugin call
+
+    // Cached: a later call returns the file without creating another editor.
+    const ScopedFakeEditor none(FakeEditorKind::None);
+    CHECK(f.host->snapshotEditor(f.instance(), f.ref.uid, f.cache) == png);
+}
+
+TEST_CASE("plugin_host: snapshotEditor caches nothing for a blank editor or none")
+{
+    SnapshotFixture f;
+    {
+        const ScopedFakeEditor none(FakeEditorKind::None);
+        CHECK(f.host->snapshotEditor(f.instance(), f.ref.uid, f.cache) == juce::File());
+    }
+    {
+        const ScopedFakeEditor blank(FakeEditorKind::Blank);
+        CHECK(f.host->snapshotEditor(f.instance(), f.ref.uid, f.cache) == juce::File());
+        CHECK_FALSE(amp::PluginHost::snapshotFile(f.cache, f.ref.uid).exists());
+    }
+    // A blank result is remembered, so the editor is not created offscreen again.
+    const ScopedFakeEditor painted(FakeEditorKind::Painted);
+    CHECK(f.host->snapshotEditor(f.instance(), f.ref.uid, f.cache) == juce::File());
+}
+
+TEST_CASE("plugin_host: snapshot file names are safe for any plugin id")
+{
+    const juce::File cache("/tmp/cache");
+    const auto f = amp::PluginHost::snapshotFile(cache, "VST3-Some Plug/in:x-1a2b3c4d-../../etc");
+    CHECK(f.getParentDirectory() == cache);
+    CHECK(f.hasFileExtension("png"));
+    CHECK_FALSE(f.getFileName().containsAnyOf("/\\:"));
+}

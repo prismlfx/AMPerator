@@ -209,6 +209,7 @@ juce::String Engine::installRig(const RigDocument& doc, bool isSaved, bool isStr
     }
     replaceLive(std::move(*built), isStructuralEdit);
     refreshMappings();
+    snapshotPluginEditors(); // before rigLoaded, which carries the snapshots
     if (isStructuralEdit)
     {
         emitRigLoaded();
@@ -452,8 +453,56 @@ juce::String Engine::userImageFor(const juce::String& rigId, const juce::String&
 juce::var Engine::artFor(const NodeDoc& n) const
 {
     const auto rigId = live ? live->doc.id : juce::String();
+    juce::String snapshot;
+    if (n.type == NodeType::Plugin && n.plugin && n.plugin->uid.isNotEmpty())
+        if (const auto f = PluginHost::snapshotFile(artDir().getChildFile("cache"), n.plugin->uid); f.existsAsFile())
+            snapshot = f.getFullPathName();
     return json::object({ { "archetype", n.artArchetype },
-                          { "image", rigId.isNotEmpty() && n.id.isNotEmpty() ? userImageFor(rigId, n.id) : juce::String() } });
+                          { "image", rigId.isNotEmpty() && n.id.isNotEmpty() ? userImageFor(rigId, n.id) : juce::String() },
+                          { "snapshot", snapshot } });
+}
+
+void Engine::snapshotPluginEditors()
+{
+    // PluginHost caches one snapshot per plugin (or remembers that it rendered blank), so the editor is created
+    // offscreen at most once per plugin, the first time it is loaded.
+    for (const auto& n : live->doc.nodes)
+    {
+        if (n.type != NodeType::Plugin || ! n.plugin)
+            continue;
+        auto* pn = live->plan->find(n.id);
+        auto* node = pn != nullptr ? dynamic_cast<PluginNode*>(pn->node.get()) : nullptr;
+        if (node != nullptr && node->instance() != nullptr)
+            plugins->snapshotEditor(*node->instance(), n.plugin->uid, artDir().getChildFile("cache"));
+    }
+}
+
+juce::File Engine::artFileForRequest(const juce::String& path) const
+{
+    const juce::String prefix = "/art/";
+    if (! path.startsWith(prefix))
+        return {};
+    const auto relative = path.substring(prefix.length());
+    if (relative.isEmpty() || relative.containsAnyOf("\\:"))
+        return {};
+
+    juce::StringArray parts;
+    parts.addTokens(relative, "/", "");
+    auto file = artDir();
+    for (const auto& part : parts)
+    {
+        if (part.isEmpty() || part == "." || part == ".." || part.startsWithChar('~'))
+            return {};
+        file = file.getChildFile(part);
+        if (file.isSymbolicLink())
+            return {};
+    }
+
+    static const juce::StringArray imageTypes { "png", "jpg", "jpeg", "gif", "webp", "svg" };
+    if (! imageTypes.contains(file.getFileExtension().fromFirstOccurrenceOf(".", false, false).toLowerCase())
+        || ! file.isAChildOf(artDir()) || ! file.existsAsFile())
+        return {};
+    return file;
 }
 
 CommandResult Engine::getState()

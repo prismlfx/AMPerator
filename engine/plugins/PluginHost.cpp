@@ -43,6 +43,23 @@ juce::StringArray readIds(const juce::File& f)
     return lines;
 }
 
+// True if every pixel of the snapshot is the same colour (or the image is empty): an editor that drew nothing.
+bool isBlank(const juce::Image& image)
+{
+    if (! image.isValid() || image.getWidth() <= 0 || image.getHeight() <= 0)
+        return true;
+    const juce::Image::BitmapData px(image, juce::Image::BitmapData::readOnly);
+    const auto first = px.getPixelColour(0, 0);
+    for (int y = 0; y < px.height; ++y)
+        for (int x = 0; x < px.width; ++x)
+            if (px.getPixelColour(x, y) != first)
+                return false;
+    return true;
+}
+
+constexpr int kMaxSnapshotWidth = 480; // thumbnails: no point caching a full-size screenshot
+constexpr int kMaxEditorSide = 8192;   // sanity limit before allocating the snapshot
+
 // Main buses: stereo in/out if supported, else mono in/stereo out, else mono/mono; otherwise the
 // plugin keeps its default layout. Plugins without an input bus only get their output negotiated.
 void negotiateLayout(juce::AudioPluginInstance& plugin)
@@ -291,6 +308,64 @@ std::unique_ptr<ProcessorNode> PluginHost::create(const PluginRef& ref, const Pr
 PluginRef PluginHost::refFor(const juce::PluginDescription& d)
 {
     return { d.pluginFormatName, d.createIdentifierString(), d.name, d.manufacturerName };
+}
+
+juce::File PluginHost::snapshotFile(const juce::File& cacheDir, const juce::String& uid)
+{
+    // Plugin ids contain spaces, slashes, colons...: keep a readable, legal name plus a hash so distinct ids
+    // never collide after sanitising.
+    auto name = juce::File::createLegalFileName(uid.replaceCharacters("/\\:. ", "_____")).substring(0, 80);
+    return cacheDir.getChildFile(name + "-" + juce::String::toHexString(uid.hashCode64()) + ".png");
+}
+
+juce::File PluginHost::snapshotEditor(juce::AudioPluginInstance& plugin, const juce::String& uid, const juce::File& cacheDir)
+{
+    const auto png = snapshotFile(cacheDir, uid);
+    if (png.existsAsFile())
+        return png;
+    const auto blankMarker = png.withFileExtension("blank");
+    if (blankMarker.exists() || uid.isEmpty() || ! plugin.hasEditor() || plugin.getActiveEditor() != nullptr)
+        return {};
+
+    juce::Image image;
+    {
+        // Creating, painting and deleting a plugin editor all call into the plugin.
+        const ScopedCrashMarker guard(dataDir.getChildFile(kCrashMarkerFile), uid);
+        std::unique_ptr<juce::AudioProcessorEditor> editor(plugin.createEditorAndMakeActive());
+        if (editor == nullptr)
+            return {};
+        const auto bounds = editor->getLocalBounds();
+        if (bounds.getWidth() > 0 && bounds.getHeight() > 0 && bounds.getWidth() <= kMaxEditorSide
+            && bounds.getHeight() <= kMaxEditorSide)
+            image = editor->createComponentSnapshot(bounds, true, 1.0f);
+        plugin.editorBeingDeleted(editor.get()); // what a host window does before deleting the editor
+        editor.reset();
+    }
+
+    if (isBlank(image))
+    {
+        if (cacheDir.createDirectory())
+            blankMarker.create();
+        return {};
+    }
+    if (image.getWidth() > kMaxSnapshotWidth)
+        image = image.rescaled(kMaxSnapshotWidth, juce::jmax(1, image.getHeight() * kMaxSnapshotWidth / image.getWidth()),
+                               juce::Graphics::highResamplingQuality);
+
+    if (! cacheDir.createDirectory())
+        return {};
+    const auto temp = png.withFileExtension("tmp");
+    {
+        temp.deleteFile();
+        juce::FileOutputStream out(temp);
+        juce::PNGImageFormat format;
+        if (! out.openedOk() || ! format.writeImageToStream(image, out))
+        {
+            temp.deleteFile();
+            return {};
+        }
+    }
+    return temp.moveFileTo(png) ? png : juce::File();
 }
 
 bool PluginHost::isBlacklisted(const juce::PluginDescription& d) const

@@ -6,6 +6,7 @@ import { call } from '../bridge';
 import { createKnob, throttle, type Knob } from '../components/knob';
 import { el, openMenu, toast, type MenuItem } from '../dialog';
 import { openArtDialog, openPluginPicker, pickAsset } from '../components/pickers';
+import { resolveArt, type NodeView } from '../art/archetypes';
 import { setLearning, store, type AppState, type Mapping, type RigNode } from '../state';
 
 export interface ParamSpec {
@@ -190,7 +191,8 @@ export function renderEdit(root: HTMLElement): void {
       openNodeMenu(n, placeholder, r.left, r.bottom + 4);
     });
 
-    const parts: Node[] = [el('div', { class: 'card-header' }, led, menuButton), el('div', { class: 'card-title' }, title)];
+    const art = el('img', { class: 'card-art', src: resolveArt(n as NodeView), alt: '', draggable: 'false' });
+    const parts: Node[] = [el('div', { class: 'card-header' }, led, menuButton), art, el('div', { class: 'card-title' }, title)];
 
     if (placeholder) {
       const original = plugin(n)?.name || (assetFile(n) ? baseName(assetFile(n)) : n.type);

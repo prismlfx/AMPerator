@@ -75,6 +75,14 @@ public:
     std::unique_ptr<ProcessorNode> create(const PluginRef&, const ProcessSpec&, juce::String& error);
     static PluginRef refFor(const juce::PluginDescription&);
 
+    // Node art: a PNG of the plugin's editor, cached as snapshotFile(cacheDir, uid). Returns the cached file if
+    // there is one. Otherwise creates the editor offscreen (under the crash marker), snapshots it and caches it --
+    // unless it rendered blank (most native VST3/AU views draw nothing offscreen): that is remembered next to it
+    // (<name>.blank) and nothing is returned, so the caller falls back to built-in art. Does nothing while the
+    // plugin's editor is open in a window, or when it has none. Message thread only.
+    juce::File snapshotEditor(juce::AudioPluginInstance&, const juce::String& uid, const juce::File& cacheDir);
+    static juce::File snapshotFile(const juce::File& cacheDir, const juce::String& uid);
+
 private:
     bool isBlacklisted(const juce::PluginDescription&) const;
     void addToBlacklist(const juce::String& id);

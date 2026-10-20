@@ -13,6 +13,19 @@ called from `ui/src/bridge.ts` with JUCE's `__juce__invoke` / `__juce__complete`
 | `amp` | one command envelope as a JSON string (an already-decoded object is accepted too) | `undefined`, immediately | Forwarded to `Bridge::handle`. The reply, like every event, arrives as a JUCE event named `amp` (`Bridge::send` → `emitEventIfBrowserIsVisible("amp", message)`). The UI correlates replies by `id` and gives up after 10 s. |
 | `chooseFolder` | — | the chosen absolute path, or `""` if cancelled | Native folder chooser (the web view has none); used to add watched folders. One chooser at a time (a second call completes with `""`). |
 
+**Node art** (`art/` resource path): the app's resource provider also serves images from the library's `Art/` folder
+at `getResourceProviderRoot() + "art/<path relative to Art/>"` (the page, served from the provider root, uses the
+relative URL `art/<path>`, each component URI-encoded). Only existing `png`/`jpg`/`jpeg`/`gif`/`webp`/`svg` files
+inside `Art/` are served (`Engine::artFileForRequest`): `..`, `.`, empty or `~` components, backslashes, colons,
+symlinks and every other file (e.g. `user-art.json`) get a 404. In dev mode the provider allows the dev-server origin,
+and the UI uses the absolute `juce://juce.backend/art/...` URL (macOS).
+
+**Plugin snapshots:** the first time a plugin is loaded (rig load or structural edit, before `rigLoaded` is sent), the
+engine creates its editor offscreen on the message thread, under the plugin crash marker, and caches a PNG
+(`Art/cache/<plugin id>-<hash>.png`, at most 480 px wide) if it drew anything. Editors that render blank offscreen
+(most native VST3/AU views) are remembered with a `.blank` file next to it and fall back to archetype art. Delete
+`Art/cache/` to retry.
+
 The UI is served from the embedded `ui/dist` (`WebBrowserComponent::getResourceProviderRoot()`); with the environment
 variable `AMP_UI_DEV=1` a Debug build of the app loads the Vite dev server at `http://localhost:5173` instead (`cd ui && npm run dev`).
 
@@ -39,8 +52,14 @@ variable `AMP_UI_DEV=1` a Debug build of the app loads the Vite dev server at `h
 **Rig** (`rig` in `rigLoaded` / `getState`): the `.amprig` JSON (`format`, `version`, `id`, `name`, `band`, `tags`,
 `nodes`, `connections`, `mappings`, see the spec §5) with two differences:
 - `nodes` are listed in **signal order** (Input first, Output last; nodes off the chain follow).
-- every node carries `art: {archetype, image}` — `archetype` is the rig's built-in art id (may be `""`), `image` is
-  the absolute path of a user-assigned image in `Art/` (or `""`). The image is never stored in the rig file.
+- every node carries `art: {archetype, image, snapshot}` — `archetype` is the rig's built-in art id (may be `""`),
+  `image` is the absolute path of a user-assigned image in `Art/` (or `""`), `snapshot` the absolute path of a cached
+  PNG of the plugin's editor in `Art/cache/` (Plugin nodes, or `""`). Neither file is stored in the rig file. The UI
+  loads both through the art resource path below and picks the picture in the spec §6 order (user image → provider
+  image → snapshot → archetype; `ui/src/art/archetypes.ts`). Built-in archetype ids: amps `british-stack`,
+  `american-clean-combo`, `high-gain-rectifier`, `ac-chime`, `amp-generic`; cabs `cab-4x12`, `cab-2x12`,
+  `cab-1x12-open`; pedals `drive`, `fuzz`, `delay`, `chorus`, `reverb`, `eq`, `gate`, `pedal-generic` (an unknown or
+  empty id means "guess from the node's type and name").
 - `params` hold the live values (every parameter the node exposes), `bypass` the live state, `state` the plugin state
   (base64) as of the last capture.
 
@@ -90,7 +109,7 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `setTuner` | `on` (bool) | `{on}` | On: `tuner` events at 20 Hz until switched off. |
 | `toggleFavorite` | `id` | `{id, favorite}` | |
 | `restoreBackup` | `id` | `{id}` | Copies the newest `.bak` over the rig file (the current file is first kept as `<file>.corrupt` if unreadable, else `<file>.replaced`), then loads it. Works for rigs corrupted before this launch (found through their backups) → `rigLoaded`. No backup → `ok:false`. |
-| `setNodeArt` | `id`, `archetype?`, `imageFile?` | `{id, art: {archetype, image}}` | `archetype` is stored in the rig (`rigDirty{true}`). `imageFile` (absolute path) is copied into `Art/` and recorded in `Art/user-art.json` under `"<rigId>/<nodeId>"` — never in the rig; `""` removes the assignment. |
+| `setNodeArt` | `id`, `archetype?`, `imageFile?` | `{id, art: {archetype, image, snapshot}}` | `archetype` is stored in the rig (`rigDirty{true}`). `imageFile` (absolute path) is copied into `Art/` and recorded in `Art/user-art.json` under `"<rigId>/<nodeId>"` — never in the rig; `""` removes the assignment. |
 
 ## Events
 
