@@ -1,9 +1,417 @@
 #include "Engine.h"
 
+#include "bridge/Bridge.h"
+#include "storage/AtomicFile.h"
+
 namespace amp
 {
 juce::String engineVersion()
 {
     return "0.1.0";
 }
+
+namespace
+{
+juce::String deviceStatusName(DeviceStatus s)
+{
+    switch (s)
+    {
+        case DeviceStatus::Running: return "Running";
+        case DeviceStatus::Disconnected: return "Disconnected";
+        case DeviceStatus::NoDevice: break;
+    }
+    return "NoDevice";
 }
+
+juce::String hidStatusName(HidFootswitch::Status s)
+{
+    switch (s)
+    {
+        case HidFootswitch::Status::Connected: return "Connected";
+        case HidFootswitch::Status::PermissionDenied: return "PermissionDenied";
+        case HidFootswitch::Status::Busy: return "Busy";
+        case HidFootswitch::Status::NotFound: break;
+    }
+    return "NotFound";
+}
+} // namespace
+
+// Prepares the tuner for the device's rate whenever the device (re)starts. Registered after the AudioIO's
+// callbacks, so JUCE calls its audioDeviceAboutToStart while holding the manager's callback lock and before any
+// audio callback at the new rate: TunerTap::prepare() never overlaps TunerTap::push(). Its own audio callback only
+// clears the (temporary) output buffer it is handed.
+struct Engine::TunerPreparer : juce::AudioIODeviceCallback
+{
+    explicit TunerPreparer(TunerTap& t) : tuner(t) {}
+
+    void audioDeviceIOCallbackWithContext(const float* const*, int, float* const* outputs, int numOutputs, int n,
+                                          const juce::AudioIODeviceCallbackContext&) override
+    {
+        for (int ch = 0; ch < numOutputs; ++ch)
+            if (outputs[ch] != nullptr)
+                juce::FloatVectorOperations::clear(outputs[ch], n);
+    }
+    void audioDeviceAboutToStart(juce::AudioIODevice* d) override { tuner.prepare(d->getCurrentSampleRate()); }
+    void audioDeviceStopped() override {}
+
+    TunerTap& tuner;
+};
+
+Engine::Engine(Options o)
+    : libraryRoot(o.libraryRoot == juce::File() ? RigStore::defaultLibraryRoot() : o.libraryRoot),
+      dataDir(o.dataDir == juce::File() ? libraryRoot : o.dataDir),
+      audioEnabled(o.startAudio),
+      controlsEnabled(o.startControls),
+      store(libraryRoot),
+      mapping([this](const juce::String& id, std::optional<bool> set) { return applyBypass(id, set); })
+{
+    bridgePtr = std::make_unique<Bridge>(*this);
+
+    for (auto* sub : { "Models", "IRs", "Rigs", "Art" })
+        libraryRoot.getChildFile(sub).createDirectory();
+    dataDir.createDirectory();
+
+    settings = Settings::load(dataDir.getChildFile("settings.json"));
+    userArt = juce::JSON::parse(artDir().getChildFile("user-art.json"));
+    if (! userArt.isObject())
+        userArt = json::object();
+
+    applyAssetRoots();
+
+    // Plugins are not scanned at startup (rescanPlugins does that); a leftover crash marker blacklists its plugin.
+    plugins = std::make_unique<PluginHost>(dataDir, std::move(o.pluginFormats), o.addDefaultPluginFormats);
+    plugins->checkCrashMarkerOnStartup();
+    loader = std::make_unique<RigLoader>(assets, *plugins);
+
+    mapping.onBypassChanged = [this](const juce::String& node, bool bypass)
+    {
+        bridge().emit("bypassChanged", json::object({ { "id", node }, { "bypass", bypass } }));
+        setDirty(true);
+    };
+    mapping.onLearned = [this](const Mapping& m)
+    {
+        if (live)
+        {
+            auto& maps = live->doc.mappings;
+            std::erase_if(maps, [&](const Mapping& r) { return r.control == m.control; });
+            maps.push_back(m);
+        }
+        bridge().emit("learned", json::object({ { "control", m.control }, { "node", m.node } }));
+        setDirty(true);
+    };
+
+    tuner.prepare(spec.sampleRate);
+    realtime.analyzerTap = [this](const float* data, int n) { tuner.push(data, n); };
+
+    if (audioEnabled)
+    {
+        if (o.deviceManager == nullptr)
+            ownedManager = std::make_unique<juce::AudioDeviceManager>();
+        manager = o.deviceManager != nullptr ? o.deviceManager : ownedManager.get();
+        audio = std::make_unique<AudioIO>(*manager, realtime);
+        tunerPreparer = std::make_unique<TunerPreparer>(tuner);
+        manager->addAudioCallback(tunerPreparer.get());
+        audio->onStatus = [this](DeviceStatus) { pollStatus(); };
+        audio->onDeviceRestarted = [this](double sr, int bs) { rebuildForDevice(sr, bs); };
+        if (const auto r = audio->apply(settings); r.failed())
+            bridge().emit("error", json::object({ { "message", r.getErrorMessage() }, { "context", "audioDevice" } }));
+        audio->writeBack(settings);
+    }
+
+    loadInitialRig();
+
+    hid.setKeyAssignments(settings.footswitchKeys);
+    if (controlsEnabled)
+    {
+        hid.onEvent = [this](const ControlEvent& e) { injectControl(e); };
+        midi.onEvent = [this](const ControlEvent& e) { injectControl(e); };
+        hid.start();
+        midi.start();
+    }
+    lastDeviceStatus = juce::JSON::toString(deviceStatusVar(), true);
+    lastControlStatus = juce::JSON::toString(controlStatusVar(), true);
+    if (audioEnabled || controlsEnabled)
+        statusTimer.startTimer(1000);
+    if (audioEnabled)
+        meterTimer.startTimerHz(30);
+
+    saveSettings();
+}
+
+Engine::~Engine()
+{
+    meterTimer.stopTimer();
+    tunerTimer.stopTimer();
+    statusTimer.stopTimer();
+    hid.stop();
+    midi.stop();
+    if (manager != nullptr && tunerPreparer != nullptr)
+        manager->removeAudioCallback(tunerPreparer.get());
+    audio.reset(); // unregisters the RealtimeEngine from the device
+    if (ownedManager != nullptr)
+        ownedManager->closeAudioDevice();
+    realtime.analyzerTap = nullptr;
+}
+
+Bridge& Engine::bridge() { return *bridgePtr; }
+
+void Engine::injectControl(const ControlEvent& e)
+{
+    bridge().emit("controlEvent", json::object({ { "control", e.control }, { "pressed", e.pressed } }));
+    mapping.handle(e);
+}
+
+// ---- Rig lifecycle ----
+
+juce::String Engine::installRig(const RigDocument& doc, bool isSaved, bool isStructuralEdit)
+{
+    juce::String error;
+    auto built = loader->build(doc, spec, error);
+    if (! built)
+        return error.isNotEmpty() ? error : juce::String("rig could not be built");
+
+    if (! realtime.swapPlan(built->plan))
+        bridge().emit("error", json::object({ { "message", "the audio engine refused the new plan (sample rate mismatch)" },
+                                              { "context", "swapPlan" } }));
+    live = std::move(*built);
+    refreshMappings();
+    if (isStructuralEdit)
+    {
+        emitRigLoaded();
+        setDirty(true);
+    }
+    else
+    {
+        saved = isSaved;
+        mapping.cancelLearn();
+        setDirty(false);
+        emitRigLoaded();
+    }
+    return {};
+}
+
+CommandResult Engine::structuralEdit(const std::function<juce::String(RigDocument&)>& edit)
+{
+    if (! live)
+        return CommandResult::failure("no rig loaded");
+    auto doc = currentDoc();
+    if (auto error = edit(doc); error.isNotEmpty())
+        return CommandResult::failure(error);
+    if (auto error = installRig(doc, saved, true); error.isNotEmpty())
+        return CommandResult::failure(error);
+    return CommandResult::success();
+}
+
+void Engine::rebuildForDevice(double sampleRate, int bufferSize)
+{
+    spec = { sampleRate, bufferSize };
+    // Same rate and block size: the running plan survived the restart (RealtimeEngine only drops plans of another
+    // rate), so don't reinstantiate every node.
+    if (! live || (juce::exactlyEqual(live->plan->spec().sampleRate, sampleRate) && live->plan->spec().maxBlock == bufferSize))
+        return;
+    juce::String error;
+    auto built = loader->build(currentDoc(), spec, error);
+    if (! built)
+    {
+        bridge().emit("error", json::object({ { "message", error }, { "context", "deviceRestart" } }));
+        return;
+    }
+    if (! realtime.swapPlan(built->plan))
+        bridge().emit("error", json::object({ { "message", "the audio engine refused the rebuilt plan" },
+                                              { "context", "deviceRestart" } }));
+    live = std::move(*built);
+}
+
+void Engine::loadInitialRig()
+{
+    if (settings.lastRigId.isNotEmpty())
+        if (auto parsed = store.load(settings.lastRigId); parsed.rig && installRig(*parsed.rig, true, false).isEmpty())
+        {
+            settings.noteRecent(settings.lastRigId);
+            return;
+        }
+    const auto error = installRig(makeDefaultRig("New Rig", "My Tones"), false, false);
+    jassert(error.isEmpty()); // the default chain is always buildable
+    juce::ignoreUnused(error);
+}
+
+void Engine::refreshMappings()
+{
+    if (! live)
+        return;
+    mapping.setMappings(live->doc.mappings, settings.globalMappings);
+    juce::StringArray ids;
+    for (auto& n : live->doc.nodes)
+        if (n.type != NodeType::Input && n.type != NodeType::Output)
+            ids.add(n.id);
+    mapping.setValidNodes(ids);
+}
+
+RigDocument Engine::currentDoc() const
+{
+    jassert(live.has_value());
+    return loader->capture(*live);
+}
+
+juce::var Engine::rigLoadedPayload() const
+{
+    return json::object({ { "rig", json::rig(currentDoc(), [this](const NodeDoc& n) { return artFor(n); }) },
+                          { "report", json::report(live->report) },
+                          { "saved", saved } });
+}
+
+void Engine::emitRigLoaded() { bridge().emit("rigLoaded", rigLoadedPayload()); }
+
+void Engine::setDirty(bool d)
+{
+    if (dirty == d)
+        return;
+    dirty = d;
+    bridge().emit("rigDirty", json::object({ { "dirty", dirty } }));
+}
+
+NodeDoc* Engine::findDocNode(const juce::String& id)
+{
+    if (! live)
+        return nullptr;
+    for (auto& n : live->doc.nodes)
+        if (n.id == id)
+            return &n;
+    return nullptr;
+}
+
+bool Engine::isPlaceholder(const juce::String& id) const
+{
+    return live && live->report.placeholderNodeIds.contains(id);
+}
+
+std::optional<bool> Engine::applyBypass(const juce::String& id, std::optional<bool> set)
+{
+    if (isPlaceholder(id)) // runs as a bypassed passthrough until its asset/plugin is available
+        return std::nullopt;
+    const auto current = realtime.getBypass(id);
+    if (! current)
+        return std::nullopt;
+    const bool next = set.value_or(! *current);
+    realtime.setBypass(id, next);
+    return next;
+}
+
+std::optional<AssetRef> Engine::assetRefFor(const juce::String& kind, const juce::String& file) const
+{
+    if (! juce::File::isAbsolutePath(file))
+        return std::nullopt;
+    const juce::File f(file);
+    for (auto& e : assets.list(kind))
+        if (e.file == f)
+            return AssetRef { kind, f.getFileName(), e.sha256, std::nullopt };
+    return std::nullopt;
+}
+
+// ---- Settings / status ----
+
+void Engine::saveSettings()
+{
+    if (! settings.save(dataDir.getChildFile("settings.json")))
+        bridge().emit("error", json::object({ { "message", "could not save settings.json" }, { "context", "settings" } }));
+}
+
+void Engine::applyAssetRoots()
+{
+    juce::Array<juce::File> roots { libraryRoot.getChildFile("Models"), libraryRoot.getChildFile("IRs") };
+    for (auto& f : settings.watchedFolders)
+        if (juce::File::isAbsolutePath(f))
+            roots.addIfNotAlreadyThere(juce::File(f));
+    assets.setRoots(roots);
+    assets.rescan(); // on the message thread (v1: watched folders are small)
+}
+
+juce::var Engine::deviceStatusVar() const
+{
+    return json::object({ { "status", audio ? deviceStatusName(audio->status()) : juce::String("NoDevice") },
+                          { "latencyMs", audio ? audio->roundTripLatencyMs() : 0.0 },
+                          { "xruns", audio ? audio->xrunCount() : -1 } });
+}
+
+juce::var Engine::controlStatusVar() const
+{
+    juce::StringArray midiDevices;
+    if (controlsEnabled)
+        for (auto& d : juce::MidiInput::getAvailableDevices())
+            midiDevices.add(d.name);
+    return json::object({ { "hid", hidStatusName(hid.status()) },
+                          { "exclusive", hid.exclusive() },
+                          { "midiDevices", json::strings(midiDevices) } });
+}
+
+void Engine::pollStatus()
+{
+    const auto device = deviceStatusVar();
+    if (auto text = juce::JSON::toString(device, true); text != lastDeviceStatus)
+    {
+        lastDeviceStatus = text;
+        bridge().emit("deviceStatus", device);
+    }
+    const auto control = controlStatusVar();
+    if (auto text = juce::JSON::toString(control, true); text != lastControlStatus)
+    {
+        lastControlStatus = text;
+        bridge().emit("controlStatus", control);
+    }
+}
+
+void Engine::pollTuner()
+{
+    if (const auto r = tuner.poll())
+        bridge().emit("tuner", json::object({ { "active", true }, { "hz", r->hz }, { "note", r->note },
+                                              { "octave", r->octave }, { "cents", r->cents } }));
+    else
+        bridge().emit("tuner", json::object({ { "active", false }, { "hz", 0.0 }, { "note", "" },
+                                              { "octave", 0 }, { "cents", 0.0 } }));
+}
+
+void Engine::emitMeter()
+{
+    // The only reader of the peak getters (each read resets the peak).
+    bridge().emit("meter", json::object({ { "inDb", realtime.inputPeakDb() }, { "outDb", realtime.outputPeakDb() } }));
+}
+
+// ---- User art ----
+
+juce::File Engine::artDir() const { return libraryRoot.getChildFile("Art"); }
+
+juce::String Engine::userImageFor(const juce::String& rigId, const juce::String& nodeId) const
+{
+    const auto name = userArt[juce::Identifier(rigId + "/" + nodeId)].toString();
+    if (name.isEmpty())
+        return {};
+    const auto f = artDir().getChildFile(name);
+    return f.existsAsFile() ? f.getFullPathName() : juce::String();
+}
+
+juce::var Engine::artFor(const NodeDoc& n) const
+{
+    const auto rigId = live ? live->doc.id : juce::String();
+    return json::object({ { "archetype", n.artArchetype },
+                          { "image", rigId.isNotEmpty() && n.id.isNotEmpty() ? userImageFor(rigId, n.id) : juce::String() } });
+}
+
+CommandResult Engine::getState()
+{
+    return CommandResult::success(json::object({
+        { "protocol", Bridge::protocolVersion },
+        { "rig", json::rig(currentDoc(), [this](const NodeDoc& n) { return artFor(n); }) },
+        { "report", json::report(live->report) },
+        { "dirty", dirty },
+        { "saved", saved },
+        { "learning", mapping.isLearning() },
+        { "settings", getSettings().result },
+        { "deviceStatus", deviceStatusVar() },
+        { "controlStatus", controlStatusVar() },
+        { "tunerOn", tunerOn },
+        { "favorites", json::strings(settings.favoriteRigIds) },
+        { "recents", json::strings(settings.recentRigIds) },
+        { "bands", json::strings(store.bands()) },
+    }));
+}
+} // namespace amp

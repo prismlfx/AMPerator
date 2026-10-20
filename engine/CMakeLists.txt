@@ -22,6 +22,10 @@ endif()
 add_library(amp_engine STATIC
   Engine.cpp
   Engine.h
+  bridge/Bridge.cpp
+  bridge/Bridge.h
+  bridge/CommandsRig.cpp
+  bridge/CommandsSystem.cpp
   audio/AudioIO.cpp
   audio/AudioIO.h
   control/ControlEvent.h
