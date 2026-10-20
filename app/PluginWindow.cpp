@@ -3,7 +3,7 @@
 namespace amp
 {
 PluginWindow::PluginWindow(juce::AudioPluginInstance& instance, juce::String id,
-                           std::function<void(const juce::String&)> onClose)
+                           std::function<void(PluginWindow&)> onClose)
     : DocumentWindow(instance.getName(), juce::Colour(0xff1b1d22), DocumentWindow::closeButton | DocumentWindow::minimiseButton),
       nodeId(std::move(id)),
       onCloseRequested(std::move(onClose))
@@ -25,7 +25,7 @@ PluginWindow::~PluginWindow()
 
 void PluginWindow::closeButtonPressed()
 {
-    onCloseRequested(nodeId);
+    onCloseRequested(*this);
 }
 
 //==============================================================================
@@ -39,13 +39,15 @@ PluginWindows::~PluginWindows()
 
 void PluginWindows::open(juce::AudioPluginInstance& instance, const juce::String& nodeId)
 {
+    if (auto it = windows.find(nodeId); it != windows.end() && ! it->second->isVisible())
+        close(nodeId); // closing (hidden, deletion pending): open a fresh one instead
     if (auto it = windows.find(nodeId); it != windows.end())
     {
         it->second->setMinimised(false);
         it->second->toFront(true);
         return;
     }
-    auto window = std::make_unique<PluginWindow>(instance, nodeId, [this](const juce::String& id) { close(id); });
+    auto window = std::make_unique<PluginWindow>(instance, nodeId, [this](PluginWindow& w) { requestClose(w); });
     if (auto b = lastBounds.find(nodeId); b != lastBounds.end())
         window->setTopLeftPosition(b->second.getPosition());
     window->toFront(true);
@@ -57,8 +59,20 @@ void PluginWindows::close(const juce::String& nodeId)
     if (auto it = windows.find(nodeId); it != windows.end())
     {
         lastBounds[nodeId] = it->second->getBounds();
-        windows.erase(it); // safe from the window's own closeButtonPressed: JUCE returns straight out of it
+        windows.erase(it);
     }
+}
+
+void PluginWindows::requestClose(PluginWindow& window)
+{
+    window.setVisible(false); // feels immediate; the deletion follows on the next message loop turn
+    juce::MessageManager::callAsync([this, id = window.nodeId, target = &window, guard = alive]
+                                    {
+                                        if (! *guard)
+                                            return;
+                                        if (auto it = windows.find(id); it != windows.end() && it->second.get() == target)
+                                            close(id);
+                                    });
 }
 
 void PluginWindows::closeAll(bool keepForReopen)
@@ -72,15 +86,16 @@ void PluginWindows::closeAll(bool keepForReopen)
     windows.clear();
     if (! keepForReopen)
     {
+        ++generation; // another rig: drop any pending reopen
         lastBounds.clear();
         return;
     }
     if (ids.isEmpty())
         return;
     // After the rebuild that is about to happen: the engine has new instances for the nodes that still exist.
-    juce::MessageManager::callAsync([this, ids, guard = alive]
+    juce::MessageManager::callAsync([this, ids, gen = generation, guard = alive]
                                     {
-                                        if (! *guard)
+                                        if (! *guard || gen != generation)
                                             return;
                                         for (auto& id : ids)
                                             reopen(id);

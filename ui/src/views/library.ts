@@ -62,7 +62,7 @@ export function renderLibrary(root: HTMLElement): void {
   let rigs: RigEntry[] = [];
   let recents = [...store.get().recents];
   let lastKey = '';
-  let lastRigId = store.get().rig?.id ?? '';
+  let lastSavedRig = store.get().saved ? (store.get().rig?.id ?? '') : ''; // id of the current rig once saved
 
   const close = el('button', { class: 'icon-button', 'aria-label': 'Close library', title: 'Close' }, '×');
   close.addEventListener('click', () => toggleLibrary(false));
@@ -207,9 +207,11 @@ export function renderLibrary(root: HTMLElement): void {
   /** Refetch the rig list when the current rig is renamed, saved, created or swapped. */
   function onState(s: AppState) {
     const rig = s.rig;
-    if (rig && s.saved && rig.id !== lastRigId) recents = [rig.id, ...recents.filter((id) => id !== rig.id)].slice(0, MAX_RECENTS);
-    lastRigId = rig?.id ?? '';
-    const key = JSON.stringify([rig?.id, rig?.name, rig?.band, s.saved, s.dirty]);
+    // The engine notes a rig as recent when it is loaded or saved (also a new rig's first save).
+    const savedId = rig && s.saved ? rig.id : '';
+    if (savedId && savedId !== lastSavedRig) recents = [savedId, ...recents.filter((id) => id !== savedId)].slice(0, MAX_RECENTS);
+    lastSavedRig = savedId;
+    const key = JSON.stringify([rig?.id, rig?.name, rig?.band, s.saved]);
     if (key === lastKey) return;
     lastKey = key;
     if (tab === 'rigs') void refreshRigs();
@@ -218,7 +220,7 @@ export function renderLibrary(root: HTMLElement): void {
   renderTabs();
   root.toggleAttribute('inert', !root.classList.contains('open'));
   root.setAttribute('aria-hidden', String(!root.classList.contains('open')));
-  lastKey = JSON.stringify([store.get().rig?.id, store.get().rig?.name, store.get().rig?.band, store.get().saved, store.get().dirty]);
+  lastKey = JSON.stringify([store.get().rig?.id, store.get().rig?.name, store.get().rig?.band, store.get().saved]);
   store.subscribe(onState);
   void refreshRigs();
 }

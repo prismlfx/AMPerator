@@ -15,7 +15,7 @@ namespace amp
 class PluginWindow final : public juce::DocumentWindow
 {
 public:
-    PluginWindow(juce::AudioPluginInstance&, juce::String nodeId, std::function<void(const juce::String&)> onCloseRequested);
+    PluginWindow(juce::AudioPluginInstance&, juce::String nodeId, std::function<void(PluginWindow&)> onCloseRequested);
     ~PluginWindow() override;
 
     void closeButtonPressed() override;
@@ -23,7 +23,7 @@ public:
     const juce::String nodeId;
 
 private:
-    std::function<void(const juce::String&)> onCloseRequested;
+    std::function<void(PluginWindow&)> onCloseRequested;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginWindow)
 };
@@ -43,13 +43,19 @@ public:
 
     void open(juce::AudioPluginInstance&, const juce::String& nodeId);
     void close(const juce::String& nodeId);
-    /** keepForReopen: remember the open node ids and reopen them asynchronously (same rig, rebuilt). */
+    /** keepForReopen: remember the open node ids and reopen them asynchronously (same rig, rebuilt). A later
+        closeAll(false) (another rig) cancels a pending reopen. */
     void closeAll(bool keepForReopen);
 
 private:
+    /** From a window's close button: the window is deleted asynchronously (never inside its own callback), and
+        only if it is still the window shown for that node. */
+    void requestClose(PluginWindow&);
+
     std::function<void(const juce::String&)> reopen;
     std::map<juce::String, std::unique_ptr<PluginWindow>> windows;
     std::map<juce::String, juce::Rectangle<int>> lastBounds; // where each node's window was, for reopening
-    std::shared_ptr<bool> alive = std::make_shared<bool>(true); // guards the async reopen
+    std::shared_ptr<bool> alive = std::make_shared<bool>(true); // guards the async callbacks
+    int generation = 0; // bumped by closeAll(false): a pending reopen of the previous rig's editors is dropped
 };
 } // namespace amp

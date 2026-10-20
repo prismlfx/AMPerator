@@ -4,8 +4,9 @@
 
 import { call } from '../bridge';
 import { createKnob, throttle, type Knob } from '../components/knob';
-import { confirmDialog, el, openMenu, openModal, toast, type MenuItem } from '../dialog';
-import { patchNode, setLearning, store, type AppState, type Mapping, type RigNode } from '../state';
+import { el, openMenu, toast, type MenuItem } from '../dialog';
+import { openArtDialog, openPluginPicker, pickAsset } from '../components/pickers';
+import { setLearning, store, type AppState, type Mapping, type RigNode } from '../state';
 
 export interface ParamSpec {
   name: string;
@@ -39,14 +40,6 @@ export const PARAMS: Record<string, ParamSpec[]> = {
     { name: 'highCut', label: 'High cut', min: 1000, max: 20000, defaultValue: 8000, unit: 'Hz' },
     { name: 'level', label: 'Level', min: -24, max: 12, defaultValue: 0, unit: 'dB' },
   ],
-  Output: [{ name: 'level', label: 'Level', min: -24, max: 12, defaultValue: 0, unit: 'dB' }],
-};
-
-/** Built-in art archetypes (spec §6; no brand names). The art itself arrives with the stage view. */
-const ARCHETYPES = {
-  amp: ['british-stack', 'american-clean-combo', 'high-gain-rectifier', 'ac-chime', 'generic'],
-  cab: ['4x12', '2x12', '1x12-open'],
-  pedal: ['drive', 'fuzz', 'delay', 'chorus', 'reverb', 'eq', 'gate', 'generic'],
 };
 
 const BUILTINS: { type: string; label: string }[] = [
@@ -107,15 +100,15 @@ export function renderEdit(root: HTMLElement): void {
   disposers.get(root)?.();
 
   const board = el('div', { class: 'pedalboard', role: 'list', 'aria-label': 'Signal chain' });
-  const overlayHost = el('div', { class: 'edit-overlay-host' });
-  root.replaceChildren(el('div', { class: 'edit-view' }, board, overlayHost));
+  root.replaceChildren(el('div', { class: 'edit-view' }, board));
 
   let key = '';
   let knobs = new Map<string, Knob>(); // `${nodeId}/${param}`
   let toggles = new Map<string, HTMLButtonElement>();
   let cards = new Map<string, HTMLElement>(); // node id -> card
   let dragActive = false;
-  let learningNode = ''; // the node a learn was armed for (for the overlay text)
+  // Bumped by every rebuild: knob/toggle senders of discarded cards check it and drop their sends.
+  let generation = 0;
 
   function render(s: AppState) {
     const k = structureKey(s);
@@ -124,7 +117,6 @@ export function renderEdit(root: HTMLElement): void {
       rebuild(s);
     }
     updateLive(s);
-    renderLearnOverlay(s);
   }
   const rerender = () => {
     key = '';
@@ -132,6 +124,8 @@ export function renderEdit(root: HTMLElement): void {
   };
 
   function rebuild(s: AppState) {
+    generation++;
+    for (const k of knobs.values()) k.dispose(); // ends a knob drag in progress on the old cards
     knobs = new Map();
     toggles = new Map();
     cards = new Map();
@@ -255,7 +249,15 @@ export function renderEdit(root: HTMLElement): void {
     }
     for (const spec of PARAMS[n.type] ?? []) {
       const current = typeof n.params?.[spec.name] === 'number' ? n.params[spec.name] : spec.defaultValue;
-      const send = throttle((value: number) => call('setParam', { id: n.id, name: spec.name, value }).catch(showError), SET_PARAM_INTERVAL_MS);
+      const gen = generation;
+      // Dropped once the cards were rebuilt (another rig, a structural edit): the node may no longer exist. A reply
+      // that fails after a rebuild is not shown either.
+      const send = throttle((value: number) => {
+        if (gen !== generation) return;
+        call('setParam', { id: n.id, name: spec.name, value }).catch((e) => {
+          if (gen === generation) showError(e);
+        });
+      }, SET_PARAM_INTERVAL_MS);
       if (spec.toggle) {
         const t = el('button', { class: 'toggle', 'aria-pressed': String(current >= 0.5), title: spec.label }, spec.label);
         t.addEventListener('click', () => {
@@ -352,7 +354,7 @@ export function renderEdit(root: HTMLElement): void {
       items.push({ label: 'Open editor', run: () => call('openPluginEditor', { id: n.id }).catch(showError) });
     items.push(
       { label: 'Learn footswitch', run: () => void learn(n.id) },
-      { label: 'Set art…', run: () => openArtDialog(n) },
+      { label: 'Set art…', run: () => openArtDialog(n, nodeTitle(n)) },
       'separator',
       { label: 'Remove', danger: true, run: () => call('removeNode', { id: n.id }).catch(showError) },
     );
@@ -386,27 +388,41 @@ export function renderEdit(root: HTMLElement): void {
   async function learn(id: string) {
     try {
       await call('learnMapping', { id });
-      learningNode = id;
-      setLearning(true);
+      setLearning(true, id);
     } catch (e) {
       showError(e);
     }
   }
-  function cancelLearn() {
-    setLearning(false);
-    call('cancelLearn').catch(showError);
-  }
 
-  function renderLearnOverlay(s: AppState) {
+  const unsubscribe = store.subscribe(render);
+  disposers.set(root, () => {
+    unsubscribe();
+    generation++;
+    for (const k of knobs.values()) k.dispose();
+  });
+  render(store.get());
+}
+
+function cancelLearn() {
+  setLearning(false);
+  call('cancelLearn').catch(showError);
+}
+
+/** "Press a footswitch…" overlay, shown in `host` (the app root, so in any view) while a learn is armed;
+    Esc or Cancel calls cancelLearn, the `learned` event (or a rig load) ends it. */
+export function mountLearnOverlay(host: HTMLElement): () => void {
+  const layer = el('div', { class: 'learn-layer' });
+  host.append(layer);
+  const render = (s: AppState) => {
     if (!s.learning) {
-      overlayHost.replaceChildren();
+      layer.replaceChildren();
       return;
     }
-    if (overlayHost.firstChild) return;
-    const node = s.rig?.nodes.find((n) => n.id === learningNode);
+    if (layer.firstChild) return;
+    const node = s.rig?.nodes.find((n) => n.id === s.learnNode);
     const cancel = el('button', { class: 'button' }, 'Cancel');
     cancel.addEventListener('click', cancelLearn);
-    overlayHost.replaceChildren(
+    layer.replaceChildren(
       el(
         'div',
         { class: 'learn-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Learn footswitch' },
@@ -420,151 +436,16 @@ export function renderEdit(root: HTMLElement): void {
       ),
     );
     cancel.focus();
-  }
-
+  };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && store.get().learning) cancelLearn();
   };
   document.addEventListener('keydown', onKey);
   const unsubscribe = store.subscribe(render);
-  disposers.set(root, () => {
+  render(store.get());
+  return () => {
     unsubscribe();
     document.removeEventListener('keydown', onKey);
-  });
-  render(store.get());
-}
-
-// ---- pickers and dialogs (modal, shared by every card) ----
-
-interface Asset {
-  file: string;
-  name: string;
-  kind: string;
-}
-
-/** Lists the library's models / IRs and assigns the chosen one to node `id`. Resolves when the picker closes. */
-export function pickAsset(id: string, kind: 'nam' | 'ir'): Promise<void> {
-  return new Promise((resolve) => {
-    const modal = openModal(kind === 'nam' ? 'Choose a NAM model' : 'Choose a cabinet IR', resolve);
-    modal.body.append(el('p', { class: 'muted' }, 'Loading…'));
-    call<{ assets: Asset[] }>('listAssets', { kind })
-      .then(({ assets }) => {
-        const choose = (file: string) => {
-          modal.close();
-          call('setAsset', { id, file }).catch(showError);
-        };
-        const none = el('button', { class: 'button small' }, kind === 'nam' ? 'No model' : 'No IR');
-        none.addEventListener('click', () => choose(''));
-        const list =
-          assets.length === 0
-            ? el(
-                'p',
-                { class: 'muted' },
-                kind === 'nam'
-                  ? 'No models yet. Put .nam files in ~/Music/AMPerator/Models, or add a watched folder in Settings.'
-                  : 'No IRs yet. Put .wav files in ~/Music/AMPerator/IRs, or add a watched folder in Settings.',
-              )
-            : el(
-                'ul',
-                { class: 'asset-list' },
-                ...assets.map((a) => {
-                  const b = el('button', { class: 'list-button', title: a.file }, el('span', {}, a.name), el('span', { class: 'muted path' }, a.file));
-                  b.addEventListener('click', () => choose(a.file));
-                  return el('li', {}, b);
-                }),
-              );
-        modal.body.replaceChildren(list, el('div', { class: 'modal-actions' }, none));
-      })
-      .catch((e) => {
-        modal.close();
-        showError(e);
-      });
-  });
-}
-
-interface PluginRef {
-  format: string;
-  uid: string;
-  name: string;
-  vendor: string;
-}
-
-const RESCAN_TIMEOUT_MS = 30 * 60 * 1000; // the engine answers when the scan is done
-
-function openPluginPicker(index: number) {
-  const modal = openModal('Add a plugin');
-  let busy = false;
-
-  const show = (plugins: PluginRef[]) => {
-    const rescan = el('button', { class: 'button' }, busy ? 'Scanning…' : 'Rescan plugins');
-    rescan.disabled = busy;
-    rescan.addEventListener('click', async () => {
-      const ok = await confirmDialog(
-        'Scanning checks every VST3 and Audio Unit plugin on this Mac. It may take a while, and AMPerator stops responding until it is done.',
-        'Scan now',
-      );
-      if (!ok) return;
-      busy = true;
-      show(plugins);
-      try {
-        const r = await call<{ plugins: PluginRef[] }>('rescanPlugins', undefined, RESCAN_TIMEOUT_MS);
-        plugins = r.plugins;
-      } catch (e) {
-        showError(e);
-      } finally {
-        busy = false;
-        show(plugins);
-      }
-    });
-    const list =
-      plugins.length === 0
-        ? el('p', { class: 'muted' }, busy ? 'Scanning plugins…' : 'No plugins found yet. Scan to find the plugins installed on this Mac.')
-        : el(
-            'ul',
-            { class: 'asset-list plugin-list' },
-            ...plugins.map((p) => {
-              const b = el('button', { class: 'list-button' }, el('span', {}, p.name), el('span', { class: 'muted' }, `${p.vendor} · ${p.format}`));
-              b.disabled = busy;
-              b.addEventListener('click', () => {
-                modal.close();
-                call('addNode', { type: 'Plugin', index, plugin: p }).catch(showError);
-              });
-              return el('li', {}, b);
-            }),
-          );
-    modal.body.replaceChildren(list, el('div', { class: 'modal-actions' }, rescan));
+    layer.remove();
   };
-
-  modal.body.append(el('p', { class: 'muted' }, 'Loading…'));
-  call<{ plugins: PluginRef[] }>('listPlugins')
-    .then((r) => show(r.plugins))
-    .catch((e) => {
-      modal.close();
-      showError(e);
-    });
-}
-
-function openArtDialog(n: RigNode) {
-  const kind = n.type === 'NamAmp' ? 'amp' : n.type === 'CabIR' ? 'cab' : 'pedal';
-  const current = (n.art as { archetype?: string } | undefined)?.archetype ?? '';
-  const modal = openModal(`Art for ${nodeTitle(n)}`, undefined, 'modal-small');
-  const select = el('select', { 'aria-label': 'Built-in art' }, el('option', { value: '' }, 'Automatic'));
-  for (const a of ARCHETYPES[kind]) select.append(el('option', { value: a }, a));
-  select.value = current;
-  const save = el('button', { class: 'button primary' }, 'Save');
-  const cancel = el('button', { class: 'button' }, 'Cancel');
-  cancel.addEventListener('click', () => modal.close());
-  save.addEventListener('click', async () => {
-    try {
-      const r = await call<{ id: string; art: unknown }>('setNodeArt', { id: n.id, archetype: select.value });
-      patchNode(n.id, { art: r.art });
-      modal.close();
-    } catch (e) {
-      showError(e);
-    }
-  });
-  modal.body.append(
-    el('label', { class: 'field' }, el('span', { class: 'field-label' }, 'Built-in art'), select),
-    el('div', { class: 'modal-actions' }, cancel, save),
-  );
 }

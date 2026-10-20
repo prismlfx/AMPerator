@@ -80,6 +80,8 @@ export interface AppState {
   dirty: boolean;
   saved: boolean;
   learning: boolean;
+  learnNode: string; // the node an armed learn will map (set by the UI; "" when unknown)
+  renamePending: boolean; // the top bar holds an unsaved rig name/band edit
   startupErrors: StartupError[];
   settings: Partial<Settings>;
   deviceStatus: DeviceStatus;
@@ -98,6 +100,8 @@ const initialState: AppState = {
   dirty: false,
   saved: false,
   learning: false,
+  learnNode: '',
+  renamePending: false,
   startupErrors: [],
   settings: {},
   deviceStatus: { status: 'NoDevice', latencyMs: 0, xruns: -1 },
@@ -136,8 +140,13 @@ export function setView(view: View) {
 }
 
 /** After learnMapping succeeded (the engine arms learn; `learned` or a rig load ends it). */
-export function setLearning(learning: boolean) {
-  update({ learning });
+export function setLearning(learning: boolean, node = '') {
+  update({ learning, learnNode: learning ? node : '' });
+}
+
+/** The top bar's name/band inputs differ from the rig (unsaved): counts as unsaved changes. */
+export function setRenamePending(renamePending: boolean) {
+  if (current.renamePending !== renamePending) update({ renamePending });
 }
 
 /** After saveRig succeeded: the engine confirms the saved name/band in its reply (no rigLoaded). */
@@ -219,7 +228,7 @@ export async function initStore(): Promise<void> {
 export async function confirmDiscardIfDirty(
   ask: (message: string) => Promise<boolean> = (m) => confirmDialog(m, 'Discard changes'),
 ): Promise<boolean> {
-  if (!current.dirty) return true;
+  if (!current.dirty && !current.renamePending) return true;
   const name = current.rig?.name ?? 'this rig';
   return ask(`“${name}” has unsaved changes. Discard them?`);
 }

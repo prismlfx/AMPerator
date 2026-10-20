@@ -6,6 +6,7 @@ let state: typeof import('../state');
 let edit: typeof import('./edit');
 let library: typeof import('./library');
 let root: HTMLElement;
+let unmountOverlay: (() => void) | null = null;
 
 const emptyReport = { missingAssets: [], missingPlugins: [], placeholderNodeIds: [], resolvedByFilename: [] };
 
@@ -65,6 +66,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  unmountOverlay?.();
+  unmountOverlay = null;
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
   delete (window as any).__JUCE__;
 });
@@ -120,6 +123,7 @@ describe('pedalboard', () => {
   it('right-click → Learn footswitch calls learnMapping', async () => {
     await started();
     edit.renderEdit(root);
+    unmountOverlay = edit.mountLearnOverlay(root);
     card('amp').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 }));
     menuItem('Learn footswitch').click();
     expect(lastCommand()).toMatchObject({ cmd: 'learnMapping', args: { id: 'amp' } });
@@ -137,6 +141,7 @@ describe('pedalboard', () => {
   it('learned event closes the overlay and labels the node with its footswitch', async () => {
     await started();
     edit.renderEdit(root);
+    unmountOverlay = edit.mountLearnOverlay(root);
     card('amp').querySelector<HTMLButtonElement>('.card-menu-button')!.click();
     menuItem('Learn footswitch').click();
     juce.reply(lastCommand().id, true, {});
@@ -153,6 +158,28 @@ describe('pedalboard', () => {
     expect(card('g').querySelector('.fs-label')?.textContent).toBe('L');
     expect(card('eq').querySelector('.fs-label')?.textContent).toBe('MIDI cc64');
     expect(card('amp').querySelector('.fs-label')).toBeNull();
+  });
+
+  it('a knob drag cut short by a rig change sends nothing for the old node', async () => {
+    await started();
+    edit.renderEdit(root);
+    pointer('pointerdown', card('g').querySelector('.card-title')!, 50);
+    pointer('pointerup', window, 50);
+    const knob = card('g').querySelector<HTMLElement>('[role="slider"]')!;
+    pointer('pointerdown', knob, 0, 300);
+    pointer('pointermove', window, 0, 290);
+    expect(lastCommand()).toMatchObject({ cmd: 'setParam', args: { id: 'g', name: 'threshold' } });
+    const sent = juce.commands().length;
+
+    // e.g. a footswitch press loads another rig mid-drag
+    const other = makeRig({ id: 'r2', name: 'Kashmir' });
+    other.nodes = other.nodes.filter((n) => n.id !== 'g');
+    juce.fromBackend('amp', { v: 1, event: 'rigLoaded', data: { rig: other, report: emptyReport, saved: true } });
+    for (let y = 280; y > 200; y -= 10) pointer('pointermove', window, 0, y);
+    pointer('pointerup', window, 0, 200);
+    await new Promise((r) => setTimeout(r, 60)); // past the throttle window: a trailing call would have fired
+    expect(juce.commands().slice(sent).filter((c) => c.cmd === 'setParam')).toEqual([]);
+    expect(document.querySelector('.toast')).toBeNull();
   });
 
   it('placeholder node shows "missing" badge with original name', async () => {

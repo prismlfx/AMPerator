@@ -172,4 +172,13 @@ describe('rigSaved', () => {
     const s = state.store.get();
     expect([s.rig?.name, s.rig?.band, s.saved]).toEqual(['Black Dog', 'Zeppelin', true]);
   });
+
+  it('confirmDiscardIfDirty treats a pending rename as unsaved changes', async () => {
+    await started();
+    const ask = vi.fn(async () => false);
+    expect(await state.confirmDiscardIfDirty(ask)).toBe(true);
+    state.setRenamePending(true);
+    expect(await state.confirmDiscardIfDirty(ask)).toBe(false);
+    expect(ask).toHaveBeenCalledOnce();
+  });
 });

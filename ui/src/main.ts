@@ -10,12 +10,13 @@ import {
   initStore,
   onToastableError,
   rigSaved,
+  setRenamePending,
   setView,
   store,
   type AppState,
   type RigNode,
 } from './state';
-import { renderEdit } from './views/edit';
+import { mountLearnOverlay, renderEdit } from './views/edit';
 import { onLibraryToggle, renderLibrary, toggleLibrary } from './views/library';
 import { openSettings } from './views/settings';
 
@@ -74,6 +75,7 @@ function syncRigFields(s: AppState) {
   if (!rig) {
     bandInput.value = nameInput.value = '';
     dirtyDot.textContent = '';
+    setRenamePending(false);
     return;
   }
   if (rig.id !== draftRigId) {
@@ -85,6 +87,7 @@ function syncRigFields(s: AppState) {
     nameInput.value = rig.name;
   }
   const renamed = draftEdited && (nameInput.value.trim() !== rig.name || bandInput.value.trim() !== rig.band);
+  setRenamePending(renamed); // confirmDiscardIfDirty counts it as unsaved changes
   const unsaved = s.dirty || renamed || !s.saved;
   dirtyDot.textContent = unsaved ? '●' : '';
   dirtyDot.title = unsaved ? (s.saved ? 'Unsaved changes' : 'Not saved yet') : '';
@@ -217,6 +220,7 @@ function nodeLabel(n: RigNode): string {
 }
 
 renderEdit(editRoot);
+mountLearnOverlay(app);
 renderLibrary(libraryPanel);
 store.subscribe(render);
 render(store.get());

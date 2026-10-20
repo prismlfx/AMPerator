@@ -16,6 +16,8 @@ export interface KnobOptions {
 
 export interface Knob {
   el: HTMLElement;
+  /** Detaches any drag in progress (window listeners) and stops calling onChange. Call when the knob is discarded. */
+  dispose(): void;
   /** Shows a value from the engine; ignored while the user is dragging this knob. */
   setValue(value: number): void;
 }
@@ -62,6 +64,8 @@ export function createKnob(o: KnobOptions): Knob {
   const clamp = (v: number) => Math.min(o.max, Math.max(o.min, v));
   let value = clamp(o.value);
   let dragging = false;
+  let disposed = false;
+  let endDrag: (() => void) | null = null;
 
   const indicator = el('span', { class: 'knob-indicator' });
   const dial = el('span', { class: 'knob-dial', 'aria-hidden': 'true' }, indicator);
@@ -91,6 +95,7 @@ export function createKnob(o: KnobOptions): Knob {
   };
 
   const change = (v: number) => {
+    if (disposed) return;
     const next = clamp(v);
     if (next === value) return;
     value = next;
@@ -99,7 +104,8 @@ export function createKnob(o: KnobOptions): Knob {
   };
 
   root.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || disposed) return;
+    endDrag?.();
     e.preventDefault();
     e.stopPropagation(); // not a card drag
     root.focus();
@@ -112,10 +118,12 @@ export function createKnob(o: KnobOptions): Knob {
     };
     const up = () => {
       dragging = false;
+      endDrag = null;
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
     };
+    endDrag = up;
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', up);
@@ -152,6 +160,10 @@ export function createKnob(o: KnobOptions): Knob {
   show();
   return {
     el: root,
+    dispose() {
+      disposed = true;
+      endDrag?.();
+    },
     setValue(v: number) {
       if (dragging) return;
       value = clamp(v);
