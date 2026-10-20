@@ -1,7 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <cmath>
 #include <optional>
+#include <thread>
 #include <vector>
 
 #include "dsp/BuiltinNodes.h"
@@ -572,4 +574,121 @@ TEST_CASE("realtime_engine: the output guard silences non-finite samples and cli
             REQUIRE(std::isfinite(x));
             REQUIRE(x == (i % 3 == 2 ? 1.0f : 0.0f));
         }
+}
+
+namespace
+{
+// Records any overlap between reset() (message thread) and process() (audio thread).
+struct OverlapProbeNode final : amp::ProcessorNode
+{
+    void prepare(const amp::ProcessSpec&) override {}
+    void reset() override
+    {
+        inReset.store(true);
+        if (inProcess.load())
+            ++overlaps;
+        for (int i = 0; i < 200; ++i) // widen the window
+            if (inProcess.load())
+                ++overlaps;
+        resets.fetch_add(1);
+        inReset.store(false);
+    }
+    void process(juce::AudioBuffer<float>& io, int n) override
+    {
+        inProcess.store(true);
+        if (inReset.load())
+            ++overlaps;
+        for (int i = 0; i < n; ++i)
+            io.setSample(0, i, io.getSample(0, i) * 0.5f);
+        if (inReset.load())
+            ++overlaps;
+        inProcess.store(false);
+    }
+    std::atomic<bool> inReset { false }, inProcess { false };
+    std::atomic<int> overlaps { 0 }, resets { 0 };
+};
+} // namespace
+
+TEST_CASE("realtime_engine: rapid on/off/on toggling never resets a node while it is processed")
+{
+    // A 1-sample bypass ramp (the rate rounds the 10 ms ramp to 1 sample) makes every block a full fade, so the node
+    // flips between processed and idle as fast as the toggles arrive.
+    auto probe = std::make_unique<OverlapProbeNode>();
+    auto* p = probe.get();
+    auto pn = std::make_shared<amp::PlanNode>();
+    pn->id = "probe";
+    pn->node = std::move(probe);
+    pn->bypass = true;
+    amp::ProcessingPlan pl({ pn }, amp::ProcessSpec { 10.0, 4 });
+
+    std::atomic<bool> stop { false };
+    std::thread audio([&] {
+        juce::AudioBuffer<float> io(2, 4);
+        while (! stop.load())
+        {
+            io.clear();
+            pl.process(io, 1);
+        }
+    });
+    const auto until = juce::Time::getMillisecondCounter() + 1500;
+    while (juce::Time::getMillisecondCounter() < until)
+    {
+        pn->requestBypass(false);
+        pn->requestBypass(true);
+    }
+    stop.store(true);
+    audio.join();
+    INFO("resets " << p->resets.load());
+    CHECK(p->resets.load() > 0);
+    CHECK(p->overlaps.load() == 0);
+}
+
+TEST_CASE("realtime_engine: node ownership hands a node to exactly one thread at a time")
+{
+    using O = amp::NodeOwnership;
+    O own(O::Idle);
+
+    // Audio thread re-engages first: the message thread may not reset until the node is idle again.
+    REQUIRE(own.audioAcquire());
+    REQUIRE(own.state() == O::Active);
+    REQUIRE_FALSE(own.beginReset());
+    REQUIRE(own.state() == O::Active);
+    own.audioRelease(); // fade-out completed
+    REQUIRE(own.state() == O::Idle);
+
+    // Message thread resets first: the audio thread must skip the node until the reset is done.
+    REQUIRE(own.beginReset());
+    REQUIRE(own.state() == O::Resetting);
+    REQUIRE_FALSE(own.audioAcquire());
+    REQUIRE_FALSE(own.beginReset());
+    own.endReset();
+    REQUIRE(own.state() == O::Idle);
+    REQUIRE(own.audioAcquire());
+}
+
+TEST_CASE("realtime_engine: a node being reset is skipped and passes its input dry")
+{
+    auto probe = std::make_unique<OverlapProbeNode>();
+    auto pn = std::make_shared<amp::PlanNode>();
+    pn->id = "probe";
+    pn->node = std::move(probe);
+    pn->bypass = true;
+    amp::ProcessingPlan pl({ pn }, amp::ProcessSpec { kRate, kBlock });
+    juce::AudioBuffer<float> io(2, kBlock);
+
+    // Interleaving: the message thread has claimed the idle node for a reset and the audio thread sees a stale
+    // bypass == false (an on -> off -> on burst). The audio thread must not touch the node.
+    REQUIRE(pn->ownership.beginReset());
+    pn->bypass.store(false);
+    for (int i = 0; i < kBlock; ++i)
+        io.setSample(0, i, 0.25f);
+    pl.process(io, kBlock);
+    CHECK(io.getSample(0, kBlock - 1) == 0.25f);
+    CHECK(io.getSample(1, kBlock - 1) == 0.25f);
+    CHECK(pn->ownership.state() == amp::NodeOwnership::Resetting);
+
+    pn->ownership.endReset();
+    pl.process(io, kBlock);
+    CHECK(pn->ownership.state() == amp::NodeOwnership::Active);
+    CHECK(io.getSample(0, kBlock - 1) < 0.25f); // now processed (fading in towards x0.5)
 }

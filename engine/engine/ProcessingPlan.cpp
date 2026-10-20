@@ -4,8 +4,11 @@ namespace amp
 {
 void PlanNode::requestBypass(bool b)
 {
-    if (! b && bypass.load(std::memory_order_relaxed) && idle.load(std::memory_order_acquire))
-        node->reset(); // the audio thread leaves an idle node alone until it sees the store below
+    if (! b && bypass.load(std::memory_order_relaxed) && ownership.beginReset())
+    {
+        node->reset(); // the audio thread cannot acquire the node while we hold it
+        ownership.endReset();
+    }
     bypass.store(b, std::memory_order_release);
 }
 
@@ -21,7 +24,7 @@ ProcessingPlan::ProcessingPlan(std::vector<std::shared_ptr<PlanNode>> nodesInOrd
     {
         const bool off = n->bypass.load();
         n->wet = off ? 0.0f : 1.0f;
-        n->idle.store(off);
+        n->ownership.initialise(off ? NodeOwnership::Idle : NodeOwnership::Active);
     }
 }
 
@@ -32,9 +35,8 @@ void ProcessingPlan::process(juce::AudioBuffer<float>& io, int n)
     for (const auto& pn : ordered) // by reference: no shared_ptr refcount traffic on the audio thread
     {
         const float target = pn->bypass.load(std::memory_order_acquire) ? 0.0f : 1.0f;
-        if (pn->wet <= 0.0f && target <= 0.0f)
-            continue; // fully bypassed
-        pn->idle.store(false, std::memory_order_relaxed);
+        if (pn->wet <= 0.0f && (target <= 0.0f || ! pn->ownership.audioAcquire()))
+            continue; // fully bypassed, or being reset off the audio thread: the input passes dry
 
         ProcessorNode& node = *pn->node;
         if (! stereo && node.isStereo())
@@ -66,7 +68,7 @@ void ProcessingPlan::process(juce::AudioBuffer<float>& io, int n)
         }
         pn->wet = w;
         if (w <= 0.0f)
-            pn->idle.store(true, std::memory_order_release); // no longer touched: requestBypass may reset it
+            pn->ownership.audioRelease(); // no longer touched: requestBypass may reset it
     }
     if (! stereo)
         io.copyFrom(1, 0, io, 0, 0, n);
