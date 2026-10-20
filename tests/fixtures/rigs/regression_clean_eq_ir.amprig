@@ -1,0 +1,15 @@
+{
+  "format": "amperator.rig",
+  "version": 1,
+  "id": "00000000-0000-4000-8000-000000000001",
+  "name": "Regression Clean EQ IR",
+  "band": "Regression",
+  "nodes": [
+    { "id": "in", "type": "Input" },
+    { "id": "gate", "type": "Gate", "bypass": false, "params": { "threshold": -55, "release": 100 } },
+    { "id": "eq", "type": "EQ", "bypass": false, "params": { "low": 3, "mid": -2, "high": 4, "midFreq": 800 } },
+    { "id": "cab", "type": "CabIR", "bypass": false, "asset": { "kind": "ir", "file": "ir_48k.wav", "sha256": "cd3e2e0d5526c7553933ff7980066cd04778706efdd192b206451261cf91be22" }, "params": { "mix": 1 } },
+    { "id": "out", "type": "Output", "params": { "gain": 0 } }
+  ],
+  "connections": [["in","gate"],["gate","eq"],["eq","cab"],["cab","out"]]
+}
