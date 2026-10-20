@@ -322,6 +322,41 @@ TEST_CASE("bridge: learnMapping then injected control press emits learned and sa
     CHECK(parsed.rig->mappings[0].node == gate);
 }
 
+TEST_CASE("bridge: assignFootswitchKey maps the next raw key, replaces the old one and persists")
+{
+    Fixture f;
+    CHECK_FALSE(static_cast<bool>(f.call("assignFootswitchKey", obj({ { "control", "midi:x:cc1" } }))["ok"]));
+
+    // A key seen without an assign pending only updates lastKey.
+    f.engine->injectRawKey(0x2a);
+    CHECK_FALSE(static_cast<bool>(f.lastEvent("controlStatus")["lastKey"].isVoid()));
+
+    f.ok("assignFootswitchKey", obj({ { "control", "footswitch:R" } }));
+    CHECK(f.lastEvent("controlStatus")["assigning"].toString() == "footswitch:R");
+    f.engine->injectRawKey(0x2b);
+    auto cs = f.lastEvent("controlStatus");
+    CHECK(cs["assigning"].isVoid());
+    CHECK(static_cast<int>(cs["lastKey"]) == 0x2b);
+
+    // The old R key (default F15 / 0x06 etc.) is gone; 0x2b is R.
+    auto keys = f.ok("getSettings")["footswitchKeys"];
+    CHECK(keys["0x2b"].toString() == "footswitch:R");
+    int rCount = 0;
+    for (auto& p : keys.getDynamicObject()->getProperties())
+        rCount += p.value.toString() == "footswitch:R";
+    CHECK(rCount == 1);
+
+    // Persisted to settings.json.
+    CHECK(Settings::load(f.data.getChildFile("settings.json")).footswitchKeys.at(0x2b) == "footswitch:R");
+
+    // Cancel clears a pending assign without changing the map.
+    f.ok("assignFootswitchKey", obj({ { "control", "footswitch:L" } }));
+    f.ok("cancelAssignFootswitchKey");
+    CHECK(f.lastEvent("controlStatus")["assigning"].isVoid());
+    f.engine->injectRawKey(0x30);
+    CHECK(f.ok("getSettings")["footswitchKeys"]["0x30"].isVoid());
+}
+
 TEST_CASE("bridge: nextRig wraps around")
 {
     Fixture f;

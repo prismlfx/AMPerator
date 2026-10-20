@@ -1,6 +1,7 @@
 # Synthesizes a 5 s mono 48 kHz 16-bit "DI-like" guitar clip: Karplus-Strong strummed chords.
-# Level matches NAM's loudness reference input (nam/models/_resources/loudness_input.wav: peak -3 dBFS,
-# RMS -15 dBFS), so a model's "loudness" metadata predicts its output level for this clip.
+# Peak matches NAM's loudness reference input (nam/models/_resources/loudness_input.wav: peak -3 dBFS,
+# RMS -15 dBFS); the clip's own RMS measures -19.4 dBFS over its 5 s (strum decays), so a model's "loudness"
+# metadata only roughly predicts its output level for this clip.
 import random, struct, wave, sys, math
 sr = 48000; total = 5 * sr
 random.seed(6)
@@ -33,4 +34,4 @@ w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
 w.writeframes(b''.join(struct.pack('<h', int(round(x * g * 32767))) for x in out))
 w.close()
 rms = math.sqrt(sum((x * g) ** 2 for x in out) / total)
-print('peak -3 dBFS, rms dBFS %.2f' % (20 * math.log10(rms)))
+print('peak -3 dBFS, rms dBFS %.2f' % (20 * math.log10(rms)))  # ~ -19.4

@@ -45,6 +45,8 @@ export interface DeviceStatus {
 export interface ControlStatus {
   hid: 'Connected' | 'NotFound' | 'PermissionDenied' | 'Busy';
   exclusive: boolean;
+  lastKey?: number | null; // HID keycode of the most recent pedal press
+  assigning?: string | null; // footswitch control waiting for its key
   midiDevices: string[];
 }
 

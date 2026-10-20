@@ -103,6 +103,8 @@ public:
 
     /** As if a footswitch/MIDI control produced `e` (test hook; also the path real controls take). */
     void injectControl(const ControlEvent& e);
+    /** As if the footswitch reported keycode `code` going down (test hook; real presses arrive as "hidkey:<code>"). */
+    void injectRawKey(int code);
     /** Spec the current plan was built with (test support). */
     ProcessSpec planSpec() const { return spec; }
 
@@ -123,6 +125,10 @@ public:
     CommandResult setAsset(const juce::String& id, const juce::String& file);
     CommandResult learnMapping(const juce::String& id);
     CommandResult cancelLearn();
+    /** control = footswitch:L|M|R. The next HID key pressed becomes that control's key (replacing its previous key);
+        the press itself does not trigger anything. Persists settings and emits controlStatus. */
+    CommandResult assignFootswitchKey(const juce::String& control);
+    CommandResult cancelAssignFootswitchKey();
     CommandResult listAssets(const juce::String& kind);
     CommandResult listPlugins();
     CommandResult rescanPlugins();
@@ -163,6 +169,7 @@ private:
     juce::var deviceStatusVar() const;
     juce::var controlStatusVar() const;
     void pollStatus();
+    void handleRawKey(int code);
     void pollTuner();
     void emitMeter();
 
@@ -189,6 +196,8 @@ private:
     std::unique_ptr<TunerPreparer> tunerPreparer;
 
     HidFootswitch hid;
+    int lastRawKey = -1;        // last HID keycode seen going down (assigned or not), -1 = none yet
+    juce::String pendingAssign; // footswitch control waiting for its key, or empty
     MidiControl midi;
     MappingEngine mapping;
 

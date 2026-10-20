@@ -208,6 +208,8 @@ const std::map<juce::String, Handler>& commands()
         { "toggleBypass", [](Engine& e, const juce::var& a) { return e.toggleBypass(nonEmpty(a, "id")); } },
         { "setAsset", [](Engine& e, const juce::var& a) { return e.setAsset(nonEmpty(a, "id"), str(a, "file")); } },
         { "learnMapping", [](Engine& e, const juce::var& a) { return e.learnMapping(nonEmpty(a, "id")); } },
+        { "assignFootswitchKey", [](Engine& e, const juce::var& a) { return e.assignFootswitchKey(nonEmpty(a, "control")); } },
+        { "cancelAssignFootswitchKey", [](Engine& e, const juce::var&) { return e.cancelAssignFootswitchKey(); } },
         { "cancelLearn", [](Engine& e, const juce::var&) { return e.cancelLearn(); } },
         { "listAssets", [](Engine& e, const juce::var& a) { return e.listAssets(str(a, "kind")); } },
         { "listPlugins", [](Engine& e, const juce::var&) { return e.listPlugins(); } },

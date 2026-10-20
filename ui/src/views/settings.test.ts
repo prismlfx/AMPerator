@@ -101,3 +101,42 @@ describe('status texts', () => {
     expect(text(settingsView.deviceStatusView({ status: 'NoDevice', latencyMs: 0, xruns: -1 }))).toContain('No audio device open');
   });
 });
+
+describe('footswitch key assignment', () => {
+  const connected = { hid: 'Connected' as const, exclusive: true, midiDevices: [] };
+  const buttons = (nodes: Node[]) => nodes.flatMap((n) => [...(n as Element).querySelectorAll?.('button') ?? []]);
+
+  it('shows the last key and an Assign button per pedal that calls the bridge', () => {
+    const assign = vi.fn();
+    const nodes = settingsView.controlStatusView({ ...connected, lastKey: 5 }, { assign, cancel: vi.fn() });
+    expect(nodes.map((n) => n.textContent).join(' ')).toContain('Last key: 0x05');
+    const bs = buttons(nodes);
+    expect(bs.map((b) => b.textContent)).toEqual(['Assign L', 'Assign M', 'Assign R']);
+    bs[2].click();
+    expect(assign).toHaveBeenCalledWith('footswitch:R');
+  });
+
+  it('prompts while waiting and a second click cancels', () => {
+    const cancel = vi.fn();
+    const nodes = settingsView.controlStatusView({ ...connected, lastKey: null, assigning: 'footswitch:M' }, { assign: vi.fn(), cancel });
+    const text = nodes.map((n) => n.textContent).join(' ');
+    expect(text).toContain('Last key: none yet');
+    const bs = buttons(nodes);
+    expect(bs[1].textContent).toBe('Press the pedal now…');
+    bs[1].click();
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('Esc in the open dialog cancels a pending assign instead of closing it', async () => {
+    await opened();
+    const state = await import('../state');
+    const started = state.initStore();
+    juce.reply(lastCommand().id, true, { controlStatus: { ...connected, lastKey: null, assigning: 'footswitch:L' } });
+    await started;
+    await flush();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flush();
+    expect(lastCommand()).toMatchObject({ cmd: 'cancelAssignFootswitchKey' });
+    expect(document.querySelector('.modal-settings')).not.toBeNull();
+  });
+});

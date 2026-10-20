@@ -125,6 +125,42 @@ CommandResult Engine::setSettings(const SettingsPatch& p)
     return getSettings();
 }
 
+void Engine::injectRawKey(int code) { handleRawKey(code); }
+
+void Engine::handleRawKey(int code)
+{
+    lastRawKey = code;
+    if (! pendingAssign.isEmpty())
+    {
+        for (auto it = settings.footswitchKeys.begin(); it != settings.footswitchKeys.end();)
+            it = it->second == pendingAssign ? settings.footswitchKeys.erase(it) : std::next(it);
+        settings.footswitchKeys[code] = pendingAssign; // also takes the key over from any other control
+        pendingAssign = {};
+        hid.setCapturing(false);
+        hid.setKeyAssignments(settings.footswitchKeys);
+        saveSettings();
+    }
+    pollStatus();
+}
+
+CommandResult Engine::assignFootswitchKey(const juce::String& control)
+{
+    if (control != "footswitch:L" && control != "footswitch:M" && control != "footswitch:R")
+        return CommandResult::failure("not a footswitch control: " + control);
+    pendingAssign = control;
+    hid.setCapturing(true);
+    pollStatus();
+    return CommandResult::success();
+}
+
+CommandResult Engine::cancelAssignFootswitchKey()
+{
+    pendingAssign = {};
+    hid.setCapturing(false);
+    pollStatus();
+    return CommandResult::success();
+}
+
 CommandResult Engine::setTuner(bool on)
 {
     if (on && ! tunerOn)

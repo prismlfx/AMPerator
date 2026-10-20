@@ -80,7 +80,7 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 
 **DeviceStatus**: `{status: "Running"|"Disconnected"|"NoDevice", latencyMs, xruns}` (`xruns` = -1 when unknown).
 
-**ControlStatus**: `{hid: "Connected"|"NotFound"|"PermissionDenied"|"Busy", exclusive: bool, midiDevices: [name]}`.
+**ControlStatus**: `{hid: "Connected"|"NotFound"|"PermissionDenied"|"Busy", exclusive: bool, lastKey: int|null, assigning: "footswitch:L"|"footswitch:M"|"footswitch:R"|null, midiDevices: [name]}`. `lastKey` is the HID keycode of the most recent pedal key-down (assigned or not; null until one is seen); `assigning` is the control waiting for its key after `assignFootswitchKey`.
 
 ## Commands
 
@@ -101,6 +101,8 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `toggleBypass` | `id` | `{bypass}` | Live. `bypassChanged`, `rigDirty{true}`. |
 | `learnMapping` | `id` | `{}` | Cancels any armed learn, then arms learn (unknown/unmappable node → `ok:false`): the next control press maps to `toggleBypass(id)` in the current rig (replacing that control's mapping) → `learned`, `rigDirty{true}`. Loading another rig cancels learn. |
 | `cancelLearn` | — | `{}` | |
+| `assignFootswitchKey` | `{control}` (`footswitch:L`/`M`/`R`) | `{}` | The next HID key pressed becomes that control's key (replacing the control's previous key and taking the key from any other control); that press does not trigger a control. Saved to `settings.footswitchKeys`, applied immediately, `controlStatus` emitted with `assigning:null` and the new `lastKey`. |
+| `cancelAssignFootswitchKey` | — | `{}` | Aborts a pending assign (`controlStatus.assigning` → null). |
 | `listAssets` | `kind` (`"nam"`\|`"ir"`) | `{assets: [Asset]}` | From `Models/`, `IRs/` and watched folders. |
 | `listPlugins` | — | `{plugins: [PluginRef]}` | From the last scan (blacklisted plugins excluded). |
 | `rescanPlugins` | — | `{plugins: [PluginRef]}` | **Blocks** the engine/UI thread for the whole scan (in-process scanning); show a busy state, and wait longer than the default 10 s for the reply (`call(cmd, args, timeoutMs)`). Never run automatically at startup. |

@@ -1,5 +1,7 @@
 #include "control/HidFootswitch.h"
 
+#include <algorithm>
+
 #include <hidapi.h>
 
 #if defined(__APPLE__)
@@ -26,6 +28,8 @@ std::vector<ControlEvent> KeyEdgeDetector::feed(const std::set<uint8_t>& keysDow
     for (auto k : keysDownInReport)
         if (held.count(k) == 0)
         {
+            lastDown = k;
+            ++downCount;
             if (auto it = assigned.find(k); it != assigned.end())
                 out.push_back({ it->second, true });
             else
@@ -50,6 +54,8 @@ std::vector<ControlEvent> KeyEdgeDetector::clearAssignments()
 }
 
 std::optional<uint8_t> KeyEdgeDetector::lastUnassignedKey() const { return lastUnassigned; }
+std::optional<uint8_t> KeyEdgeDetector::lastKeyDown() const { return lastDown; }
+uint64_t KeyEdgeDetector::keyDownCount() const { return downCount; }
 
 // --- Report parsing / device eligibility -------------------------------------------------------
 
@@ -260,18 +266,33 @@ hid_device* HidFootswitch::tryOpen()
     return nullptr;
 }
 
+std::vector<ControlEvent> HidFootswitch::translate(const std::set<uint8_t>& keysDown)
+{
+    std::vector<ControlEvent> events;
+    std::optional<uint8_t> newKey;
+    {
+        std::lock_guard lock(detectorLock);
+        const auto before = detector.keyDownCount();
+        events = detector.feed(keysDown);
+        if (detector.keyDownCount() != before)
+            newKey = detector.lastKeyDown();
+    }
+    if (newKey)
+    {
+        if (capturing.exchange(false))
+            events.erase(std::remove_if(events.begin(), events.end(), [](const ControlEvent& e) { return e.pressed; }),
+                         events.end());
+        events.insert(events.begin(), { "hidkey:" + juce::String(static_cast<int>(*newKey)), true });
+    }
+    return events;
+}
+
 void HidFootswitch::handleReport(const uint8_t* data, size_t length)
 {
     auto keys = parseKeyboardReport(data, length);
     if (!keys)
         return;
-
-    std::vector<ControlEvent> events;
-    {
-        std::lock_guard lock(detectorLock);
-        events = detector.feed(*keys);
-    }
-    for (auto& e : events)
+    for (auto& e : translate(*keys))
         post(e);
 }
 

@@ -21,6 +21,7 @@ export function openSettings() {
   const unsubscribe = store.subscribe((s) => renderLive(s));
   const modal = openModal('Settings', () => {
     unsubscribe();
+    document.removeEventListener('keydown', onEsc, true);
     openInstance = null;
   }, 'modal-settings');
   openInstance = modal;
@@ -32,6 +33,20 @@ export function openSettings() {
   );
 
   let lastDeviceStatus = store.get().deviceStatus.status;
+  let wasAssigning = false;
+
+  // Esc while waiting for a pedal press cancels the assign instead of closing the dialog.
+  const onEsc = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && store.get().controlStatus.assigning) {
+      e.stopImmediatePropagation();
+      void call('cancelAssignFootswitchKey').catch(() => {});
+    }
+  };
+  document.addEventListener('keydown', onEsc, true);
+  const footswitchActions: FootswitchActions = {
+    assign: (control) => void call('assignFootswitchKey', { control }).catch((e) => toast((e as Error).message)),
+    cancel: () => void call('cancelAssignFootswitchKey').catch(() => {}),
+  };
 
   async function load() {
     try {
@@ -148,7 +163,10 @@ export function openSettings() {
 
   function renderLive(s: AppState) {
     status.replaceChildren(...deviceStatusView(s.deviceStatus));
-    controls.replaceChildren(...controlStatusView(s.controlStatus));
+    controls.replaceChildren(...controlStatusView(s.controlStatus, footswitchActions));
+    const assigning = !!s.controlStatus.assigning;
+    if (wasAssigning && !assigning && !busy) void load(); // the key map changed (or the assign was cancelled)
+    wasAssigning = assigning;
     // Hot-plug: the device list and the open device's capabilities may have changed.
     if (s.deviceStatus.status !== lastDeviceStatus) {
       lastDeviceStatus = s.deviceStatus.status;
@@ -204,7 +222,35 @@ export function deviceStatusView(d: DeviceStatus): Node[] {
   return out;
 }
 
-export function controlStatusView(c: ControlStatus): Node[] {
+export interface FootswitchActions {
+  assign(control: string): void;
+  cancel(): void;
+}
+
+const PEDALS: [string, string][] = [
+  ['footswitch:L', 'L'],
+  ['footswitch:M', 'M'],
+  ['footswitch:R', 'R'],
+];
+
+function keyAssignView(c: ControlStatus, actions: FootswitchActions): Node {
+  const hex = (n: number) => '0x' + n.toString(16).toUpperCase().padStart(2, '0');
+  const buttons = PEDALS.map(([control, label]) => {
+    const waiting = c.assigning === control;
+    const b = el('button', { type: 'button', class: waiting ? 'assigning' : '' }, waiting ? 'Press the pedal now…' : `Assign ${label}`);
+    b.addEventListener('click', () => (waiting ? actions.cancel() : actions.assign(control)));
+    return b;
+  });
+  return el(
+    'div',
+    { class: 'footswitch-keys' },
+    el('p', {}, `Last key: ${c.lastKey == null ? 'none yet' : hex(c.lastKey)}`),
+    el('div', { class: 'row' }, ...buttons),
+    c.assigning ? el('p', { class: 'hint' }, 'Press the pedal you want for this slot (Esc to cancel).') : el('span'),
+  );
+}
+
+export function controlStatusView(c: ControlStatus, actions?: FootswitchActions): Node[] {
   let hid: Node;
   switch (c.hid) {
     case 'Connected':
@@ -235,5 +281,6 @@ export function controlStatusView(c: ControlStatus): Node[] {
     c.midiDevices.length === 0
       ? el('p', { class: 'muted' }, 'No MIDI input devices.')
       : el('ul', { class: 'midi-list' }, ...c.midiDevices.map((m) => el('li', {}, m)));
-  return [el('h4', {}, 'USB footswitch'), hid, el('h4', {}, 'MIDI inputs'), midi];
+  const keys = actions && c.hid === 'Connected' ? [keyAssignView(c, actions)] : [];
+  return [el('h4', {}, 'USB footswitch'), hid, ...keys, el('h4', {}, 'MIDI inputs'), midi];
 }

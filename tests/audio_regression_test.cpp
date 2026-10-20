@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <map>
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_dsp/juce_dsp.h>
@@ -151,10 +152,11 @@ TEST_CASE("audio_regression: reference rigs match their reference renders")
     const auto di = readWav(fixtures().getChildFile("di/di_48k.wav"));
     const double diRms = rmsOf(di.getReadPointer(0), di.getNumSamples());
     const double diHf = energyFractionAbove(di, 1000.0);
+    std::map<juce::String, juce::AudioBuffer<float>> renders;
 
     for (const auto& rc : kRigs)
     {
-        DYNAMIC_SECTION(rc.rig)
+        INFO("rig: " << rc.rig);
         {
             const auto out = renderRig(rc.rig, di);
             const auto refFile = fixtures().getChildFile("reference").getChildFile(rc.reference);
@@ -171,11 +173,13 @@ TEST_CASE("audio_regression: reference rigs match their reference renders")
             REQUIRE(toDb(outRms) > -40.0);
             REQUIRE(toDb(outRms) < -6.0);
 
+            renders[rc.rig] = out;
             if (updateMode())
             {
                 writeWav24(refFile, out);
                 std::printf("[reference] %s: peak %.2f dBFS, rms %.2f dBFS (DI rms %.2f), HF>1k %.4f (DI %.4f)\n",
                             rc.reference, toDb(peak), toDb(outRms), toDb(diRms), energyFractionAbove(out, 1000.0), diHf);
+                continue; // never compare a render against the reference it just wrote
             }
 
             REQUIRE(refFile.existsAsFile());
@@ -205,4 +209,23 @@ TEST_CASE("audio_regression: reference rigs match their reference renders")
                 REQUIRE(std::abs(energyFractionAbove(out, 1000.0) - diHf) > 1e-3);
         }
     }
+
+    // The gate bypass must matter: the gated and bypassed NAM rigs may not render alike.
+    if (renders.count("regression_nam_ir.amprig") && renders.count("regression_nam_ir_gate_bypassed.amprig"))
+    {
+        const auto& a = renders["regression_nam_ir.amprig"];
+        const auto& b = renders["regression_nam_ir_gate_bypassed.amprig"];
+        double s = 0;
+        for (int i = 0; i < a.getNumSamples(); ++i)
+        {
+            const double d = (double) a.getSample(0, i) - b.getSample(0, i);
+            s += d * d;
+        }
+        const double gateDiffDb = toDb(std::sqrt(s / a.getNumSamples()));
+        INFO("gated vs bypassed NAM rig differ by " << gateDiffDb << " dBFS");
+        REQUIRE(gateDiffDb > -50.0);
+    }
+
+    if (updateMode())
+        FAIL("references regenerated: review them, commit, then rerun without AMP_UPDATE_REFERENCES");
 }

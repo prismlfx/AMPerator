@@ -7,9 +7,9 @@ Legend: `[x]` = verified by the automated/headless run (evidence given); `[ ]` =
 
 ## Headless pre-checks (done by the implementer, 2026-10-19, no hardware)
 
-- [x] C++ suite green: `ctest --test-dir build -C Debug` -> 211/211 passed (includes `audio_regression`, run 3x, stable).
-- [x] UI suite green: `cd ui && npx vitest run` -> 6 files, 73 tests passed.
-- [x] Release configuration builds and the suite passes (RtSafety compiles out): `ctest --test-dir build -C Release` -> 211/211 passed.
+- [x] C++ suite green: `ctest --test-dir build -C Debug` -> all passed (includes `audio_regression`, run 3x, stable).
+- [x] UI suite green: `cd ui && npx vitest run` -> 6 files, 76 tests passed.
+- [x] Release configuration builds and the suite passes (RtSafety compiles out): `ctest --test-dir build -C Release` -> 213/213 passed.
 - [x] Debug app process launches and stays alive for 8 s (no crash on startup; no screen access, so UI not seen).
 - [ ] App window shows the Stage view (needs you).
 
@@ -29,7 +29,8 @@ Legend: `[x]` = verified by the automated/headless run (evidence given); `[ ]` =
 
 - [ ] Input Monitoring permission prompt flow works (prompt, grant in System Settings, relaunch if asked).
 - [ ] Settings shows status Connected and whether the mode is "exclusive" or "shared".
-- [ ] Note the key codes each pedal sends (Settings shows them): L ______  M ______  R ______
+- [ ] Settings > Footswitch shows "Last key: 0x.." when you stomp a pedal. Note the key codes: L ______  M ______  R ______
+- [ ] Assign L/M/R in Settings > Footswitch (click Assign, stomp the pedal; Esc cancels), then confirm each pedal lights its Stage tile.
 - [ ] Works with another app focused (e.g. a text editor in front), and in exclusive mode types no stray characters.
 - [ ] Stomping L / M / R lights the matching Stage tiles and toggles the mapped node.
 - [ ] Tip: if the mode is "shared" (pedal still types into other apps), reprogram the pedal to send F13 / F14 / F15 with the vendor tool, then re-check the items above.

@@ -125,7 +125,13 @@ Engine::Engine(Options o)
     hid.setKeyAssignments(settings.footswitchKeys);
     if (controlsEnabled)
     {
-        hid.onEvent = [this](const ControlEvent& e) { injectControl(e); };
+        hid.onEvent = [this](const ControlEvent& e)
+        {
+            if (e.control.startsWith("hidkey:"))
+                handleRawKey(e.control.fromFirstOccurrenceOf(":", false, false).getIntValue());
+            else
+                injectControl(e);
+        };
         midi.onEvent = [this](const ControlEvent& e) { injectControl(e); };
         hid.start();
         midi.start();
@@ -402,6 +408,8 @@ juce::var Engine::controlStatusVar() const
             midiDevices.add(d.name);
     return json::object({ { "hid", hidStatusName(hid.status()) },
                           { "exclusive", hid.exclusive() },
+                          { "lastKey", lastRawKey >= 0 ? juce::var(lastRawKey) : juce::var() },
+                          { "assigning", pendingAssign.isEmpty() ? juce::var() : juce::var(pendingAssign) },
                           { "midiDevices", json::strings(midiDevices) } });
 }
 

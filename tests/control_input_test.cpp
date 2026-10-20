@@ -277,3 +277,26 @@ TEST_CASE("control_input: footswitch keys parse hex and decimal and fall back de
     f.replaceWithText(R"({"footswitchKeys":{}})"); // user cleared every pedal
     CHECK(Settings::load(f).footswitchKeys.empty());
 }
+
+TEST_CASE("control_input: capture swallows the next key-down and reports the raw key")
+{
+    HidFootswitch hid;
+    hid.setKeyAssignments({ { 0x04, "footswitch:L" } });
+    auto has = [](const std::vector<ControlEvent>& v, const char* c, bool pressed)
+    {
+        for (auto& e : v)
+            if (e.control == c && e.pressed == pressed)
+                return true;
+        return false;
+    };
+
+    hid.setCapturing(true);
+    auto ev = hid.translate({ 0x04 }); // an assigned key while capturing: raw key reported, no footswitch press
+    CHECK(has(ev, "hidkey:4", true));
+    CHECK_FALSE(has(ev, "footswitch:L", true));
+    hid.translate({});
+
+    ev = hid.translate({ 0x04 }); // capturing turned itself off: the key presses normally again
+    CHECK(has(ev, "hidkey:4", true));
+    CHECK(has(ev, "footswitch:L", true));
+}

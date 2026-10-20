@@ -29,8 +29,14 @@ public:
     std::vector<ControlEvent> clearAssignments();
     /** The most recent unassigned key that went down, for setup learning. */
     std::optional<uint8_t> lastUnassignedKey() const;
+    /** The most recent key that went down, assigned or not. */
+    std::optional<uint8_t> lastKeyDown() const;
+    /** Increments on every key-down edge. */
+    uint64_t keyDownCount() const;
 
 private:
+    uint64_t downCount = 0;
+    std::optional<uint8_t> lastDown;
     std::map<uint8_t, juce::String> assigned;
     std::set<uint8_t> held;
     std::set<uint8_t> suppressed; // held across a reassignment: ignored until released
@@ -80,6 +86,13 @@ public:
     /** Keycode -> control ID, typically Settings::footswitchKeys. Callable at any time. */
     void setKeyAssignments(const std::map<int, juce::String>& keys);
     std::optional<uint8_t> lastUnassignedKey() const;
+    /** While capturing, the next key-down is swallowed (no control press is posted for it) and capturing turns off.
+        Every key-down also posts a ControlEvent { "hidkey:<keycode>", true } so the owner learns of the raw key. */
+    void setCapturing(bool on) { capturing.store(on); }
+
+    /** Turns the keys currently down into the events to post: a "hidkey:<code>" press first for a new key-down, then
+        the control edges (the control press of that key is dropped when capturing). Public for tests. */
+    std::vector<ControlEvent> translate(const std::set<uint8_t>& keysDown);
 
     /** Best-effort VID/PID list (unverified guesses); discovery also matches product strings, see isEligibleFootswitch. */
     static std::vector<std::pair<uint16_t, uint16_t>> knownDevices();
@@ -92,6 +105,7 @@ private:
 
     std::atomic<Status> currentStatus { Status::NotFound };
     std::atomic<bool> exclusiveOpen { false };
+    std::atomic<bool> capturing { false };
     mutable std::mutex detectorLock;
     KeyEdgeDetector detector;
 };
