@@ -406,7 +406,7 @@ juce::var Engine::controlStatusVar() const
     if (controlsEnabled)
         for (auto& d : juce::MidiInput::getAvailableDevices())
             midiDevices.add(d.name);
-    return json::object({ { "hid", hidStatusName(hid.status()) },
+    return json::object({ { "hid", hidStatusName(currentHidStatus()) },
                           { "exclusive", hid.exclusive() },
                           { "lastKey", lastRawKey >= 0 ? juce::var(lastRawKey) : juce::var() },
                           { "assigning", pendingAssign.isEmpty() ? juce::var() : juce::var(pendingAssign) },
@@ -415,6 +415,16 @@ juce::var Engine::controlStatusVar() const
 
 void Engine::pollStatus()
 {
+    // A pending key assign must not outlive the pedal or the user's attention.
+    const auto hidNow = currentHidStatus();
+    const bool disconnected = lastHidStatus == HidFootswitch::Status::Connected && hidNow != HidFootswitch::Status::Connected;
+    lastHidStatus = hidNow;
+    if (! pendingAssign.isEmpty()
+        && (disconnected || juce::Time::getMillisecondCounter() - assignStartedMs > 15000))
+    {
+        pendingAssign = {};
+        hid.setCapturing(false);
+    }
     const auto device = deviceStatusVar();
     if (auto text = juce::JSON::toString(device, true); text != lastDeviceStatus)
     {

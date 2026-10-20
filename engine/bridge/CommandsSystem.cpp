@@ -127,6 +127,12 @@ CommandResult Engine::setSettings(const SettingsPatch& p)
 
 void Engine::injectRawKey(int code) { handleRawKey(code); }
 
+void Engine::injectHidStatus(HidFootswitch::Status st)
+{
+    hidStatusOverride = st;
+    pollStatus();
+}
+
 void Engine::handleRawKey(int code)
 {
     lastRawKey = code;
@@ -148,6 +154,7 @@ CommandResult Engine::assignFootswitchKey(const juce::String& control)
     if (control != "footswitch:L" && control != "footswitch:M" && control != "footswitch:R")
         return CommandResult::failure("not a footswitch control: " + control);
     pendingAssign = control;
+    assignStartedMs = juce::Time::getMillisecondCounter();
     hid.setCapturing(true);
     pollStatus();
     return CommandResult::success();

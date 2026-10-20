@@ -8,8 +8,8 @@ Legend: `[x]` = verified by the automated/headless run (evidence given); `[ ]` =
 ## Headless pre-checks (done by the implementer, 2026-10-19, no hardware)
 
 - [x] C++ suite green: `ctest --test-dir build -C Debug` -> all passed (includes `audio_regression`, run 3x, stable).
-- [x] UI suite green: `cd ui && npx vitest run` -> 6 files, 76 tests passed.
-- [x] Release configuration builds and the suite passes (RtSafety compiles out): `ctest --test-dir build -C Release` -> 213/213 passed.
+- [x] UI suite green: `cd ui && npx vitest run` -> 6 files, 77 tests passed.
+- [x] Release configuration builds and the suite passes (RtSafety compiles out): `ctest --test-dir build -C Release` -> 214/214 passed.
 - [x] Debug app process launches and stays alive for 8 s (no crash on startup; no screen access, so UI not seen).
 - [ ] App window shows the Stage view (needs you).
 

@@ -357,6 +357,21 @@ TEST_CASE("bridge: assignFootswitchKey maps the next raw key, replaces the old o
     CHECK(f.ok("getSettings")["footswitchKeys"]["0x30"].isVoid());
 }
 
+TEST_CASE("bridge: a pending footswitch assign is dropped when the pedal disconnects")
+{
+    Fixture f;
+    f.engine->injectHidStatus(HidFootswitch::Status::Connected);
+    f.ok("assignFootswitchKey", obj({ { "control", "footswitch:L" } }));
+    CHECK(f.lastEvent("controlStatus")["assigning"].toString() == "footswitch:L");
+
+    f.engine->injectHidStatus(HidFootswitch::Status::NotFound);
+    CHECK(f.lastEvent("controlStatus")["assigning"].isVoid());
+
+    f.engine->injectHidStatus(HidFootswitch::Status::Connected); // reconnect: the next stomp is a normal press
+    f.engine->injectRawKey(0x41);
+    CHECK(f.ok("getSettings")["footswitchKeys"]["0x41"].isVoid());
+}
+
 TEST_CASE("bridge: nextRig wraps around")
 {
     Fixture f;

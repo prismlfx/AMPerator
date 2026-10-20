@@ -105,6 +105,8 @@ public:
     void injectControl(const ControlEvent& e);
     /** As if the footswitch reported keycode `code` going down (test hook; real presses arrive as "hidkey:<code>"). */
     void injectRawKey(int code);
+    /** Pretend the footswitch is in status `s` from now on (test hook for connect/disconnect). */
+    void injectHidStatus(HidFootswitch::Status s);
     /** Spec the current plan was built with (test support). */
     ProcessSpec planSpec() const { return spec; }
 
@@ -170,6 +172,8 @@ private:
     juce::var controlStatusVar() const;
     void pollStatus();
     void handleRawKey(int code);
+    void cancelPendingAssign();
+    HidFootswitch::Status currentHidStatus() const { return hidStatusOverride ? *hidStatusOverride : hid.status(); }
     void pollTuner();
     void emitMeter();
 
@@ -196,6 +200,9 @@ private:
     std::unique_ptr<TunerPreparer> tunerPreparer;
 
     HidFootswitch hid;
+    std::optional<HidFootswitch::Status> hidStatusOverride;
+    HidFootswitch::Status lastHidStatus = HidFootswitch::Status::NotFound;
+    juce::uint32 assignStartedMs = 0;
     int lastRawKey = -1;        // last HID keycode seen going down (assigned or not), -1 = none yet
     juce::String pendingAssign; // footswitch control waiting for its key, or empty
     MidiControl midi;

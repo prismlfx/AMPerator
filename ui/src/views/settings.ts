@@ -20,6 +20,7 @@ export function openSettings() {
 
   const unsubscribe = store.subscribe((s) => renderLive(s));
   const modal = openModal('Settings', () => {
+    if (store.get().controlStatus.assigning) void call('cancelAssignFootswitchKey').catch(() => {});
     unsubscribe();
     document.removeEventListener('keydown', onEsc, true);
     openInstance = null;

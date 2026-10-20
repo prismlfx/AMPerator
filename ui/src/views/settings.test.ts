@@ -139,4 +139,16 @@ describe('footswitch key assignment', () => {
     expect(lastCommand()).toMatchObject({ cmd: 'cancelAssignFootswitchKey' });
     expect(document.querySelector('.modal-settings')).not.toBeNull();
   });
+
+  it('closing the dialog mid-assign cancels the assign', async () => {
+    await opened();
+    const state = await import('../state');
+    const started = state.initStore();
+    juce.reply(lastCommand().id, true, { controlStatus: { ...connected, lastKey: null, assigning: 'footswitch:L' } });
+    await started;
+    await flush();
+    document.querySelector<HTMLElement>('.modal-settings button[aria-label="Close"], .modal-settings .modal-close')?.click();
+    await flush();
+    expect(juce.commands().some((c) => c.cmd === 'cancelAssignFootswitchKey')).toBe(true);
+  });
 });
