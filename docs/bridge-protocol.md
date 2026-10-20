@@ -73,7 +73,10 @@ Placeholder nodes keep all their data but run as bypassed passthroughs; `toggleB
 **Asset**: `{file: absolute path, name: file name without extension, kind: "nam"|"ir", sha256}`.
 
 **Settings**: `{audioDeviceType, audioDeviceName, inputChannel, outputFirstChannel, sampleRate, bufferSize,
-watchedFolders: [path], globalMappings: [{control, action, node}], footswitchKeys: {"0x04": "footswitch:L", ...}}`
+watchedFolders: [path], globalMappings: [{control, action, node}], footswitchKeys: {"0x04": "footswitch:L", ...},
+footswitchDevice: {vid, pid} | null}` (`footswitchDevice`: a keyboard the user picked as the footswitch; it is opened in
+addition to the automatically recognised models — no other keyboard is ever grabbed. `setSettings` takes `{vid, pid}`
+(16-bit ids) or `null` to clear.)
 (+ in `getSettings`/`setSettings` results: `availableDevices: [name]`, `availableSampleRates: [hz]`,
 `availableBufferSizes: [n]`, `availableInputChannels: [name]`, `availableOutputChannels: [name]` of the open device /
 current type; empty without audio. `inputChannel` / `outputFirstChannel` index the channel-name lists).
@@ -86,7 +89,7 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 
 | Command | Args | Result | Notes / events |
 |---|---|---|---|
-| `getState` | — | `{protocol: 1, rig, report, dirty, startupErrors: [{message, context, rigId?}], saved, learning, settings, deviceStatus, controlStatus, tunerOn, favorites: [id], recents: [id], bands: [name]}` | Call on UI start-up. `startupErrors` lists problems found while starting (`context` `loadRig` with the `rigId` of a last rig that could not be loaded — offer `restoreBackup`; `audioDevice`; `audioPermission` when microphone access was denied — the app opens the device only after asking, so this entry may appear after the first `getState`). |
+| `getState` | — | `{protocol: 1, rig, report, dirty, startupErrors: [{message, context, rigId?}], saved, learning, settings, deviceStatus, controlStatus, tunerOn, favorites: [id], recents: [id], bands: [name]}` | Call on UI start-up. `startupErrors` lists problems found while starting (`context` `loadRig` with the `rigId` of a last rig that could not be loaded — offer `restoreBackup`; `audioDevice`; `audioPermission` when microphone access was denied — the app opens the device only after asking, so this entry may appear after the first `getState`; `pluginBlacklisted` with `pluginId`: "<plugin> crashed last time and was disabled" — offer Retry → `unblacklistPlugin`). |
 | `listRigs` | — | `{rigs: [{id, name, band, favorite}], bands: [name]}` | Sorted by band, then name. Corrupt files and hidden files/folders (`.DS_Store`, ...) are not listed. Two files with the same `id` (e.g. a Finder copy): the file the engine already knew keeps the id (else the oldest file, then the shorter name) and the other is rewritten (atomically) with a fresh id, so both list and open independently. |
 | `loadRig` | `id` | `{id}` | `rigLoaded`, `rigDirty{false}` if it was dirty. Corrupt / unreadable rig → `ok:false` with the parse error (file untouched; offer `restoreBackup`). Unsaved changes of the current rig are discarded (UI confirms using `dirty`). |
 | `newRig` | `name?` (default `"New Rig"`), `band?` (default `"My Tones"`) | `{id}` | Default chain In → Gate → NamAmp → CabIR → Out; **unsaved** until `saveRig` (`saved:false`). `rigLoaded`. |
@@ -103,8 +106,11 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `cancelLearn` | — | `{}` | |
 | `assignFootswitchKey` | `{control}` (`footswitch:L`/`M`/`R`) | `{}` | The next HID key pressed becomes that control's key (replacing the control's previous key and taking the key from any other control); that press does not trigger a control. Saved to `settings.footswitchKeys`, applied immediately, `controlStatus` emitted with `assigning:null` and the new `lastKey`. |
 | `cancelAssignFootswitchKey` | — | `{}` | Aborts a pending assign (`controlStatus.assigning` → null). |
-| `listAssets` | `kind` (`"nam"`\|`"ir"`) | `{assets: [Asset]}` | From `Models/`, `IRs/` and watched folders. |
+| `listAssets` | `kind` (`"nam"`\|`"ir"`) | `{assets: [Asset]}` | From `Models/`, `IRs/` and watched folders, rescanned on every call (hashes are cached), so files dropped in while the app runs appear at once. `loadRig`, `newRig`, `addNode` with an asset and `setAsset` rescan before resolving too. |
 | `listPlugins` | — | `{plugins: [PluginRef]}` | From the last scan (blacklisted plugins excluded). |
+| `listBlacklisted` | — | `{plugins: [{id, name}]}` | Plugins disabled because they crashed AMPerator (blacklist ids: a plugin id or a plugin file; `name` is the known plugin name, else the file name, else the id). |
+| `unblacklistPlugin` | `id` | `{plugins: [{id, name}]}` (the remaining list) | Re-enables it. A plugin that crashed while it was being scanned only shows up again after `rescanPlugins`. Unknown id → `ok:false`. |
+| `listHidKeyboards` | — | `{keyboards: [{vid, pid, id: "vvvv:pppp", manufacturer, product}]}` | Connected keyboard-type HID devices (usage page 1, usage 6), one per vendor/product id, for picking an unrecognised footswitch (`setSettings{footswitchDevice}`). Empty when the engine runs without controls. |
 | `rescanPlugins` | — | `{plugins: [PluginRef]}` | **Blocks** the engine/UI thread for the whole scan (in-process scanning); show a busy state, and wait longer than the default 10 s for the reply (`call(cmd, args, timeoutMs)`). Never run automatically at startup. |
 | `openPluginEditor` | `id` | `{}` | Asks the app to open the plugin's native editor window (one per node; opening it again brings it to the front). `ok:false "not available"` if the node isn't a loaded plugin or the host app has no editor support. Editor windows close whenever the rig's nodes are rebuilt (`Engine::beforeNodesReplaced`: rig load, structural edit, device-rate change); after a rebuild of the same rig the app reopens the editors of nodes that still exist. |
 | `getSettings` | — | Settings (+ available lists) | |
@@ -130,4 +136,4 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `controlEvent` | `{control, pressed}` | Every footswitch/MIDI edge (`footswitch:L`, `midi:<device>:cc<n>`, ...). |
 | `learned` | `{control, node}` | A learn completed. |
 | `quitRequested` | `{rigName}` | The app is quitting (Cmd-Q / window close) and the rig has unsaved changes. Show Save / Discard / Cancel and answer with `confirmQuit`. If no answer arrives within ~5 s the app asks with a native dialog instead. A clean rig quits without this event. |
-| `error` | `{message, context}` | Asynchronous problems (`context`: `audioDevice`, `audioPermission` (microphone access denied; also listed in `startupErrors`), `deviceRestart`, `swapPlan`, `settings`). Command failures are replies, not events. Errors raised before the UI set `send` (startup) are queued and delivered ahead of the first reply/event. |
+| `error` | `{message, context}` | Asynchronous problems (`context`: `audioDevice`, `audioPermission` (microphone access denied; also listed in `startupErrors`), `pluginBlacklisted` (+ `pluginId`; also in `startupErrors`), `deviceRestart`, `swapPlan`, `settings`). Command failures are replies, not events. Errors raised before the UI set `send` (startup) are queued and delivered ahead of the first reply/event. |

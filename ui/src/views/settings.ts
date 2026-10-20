@@ -1,4 +1,5 @@
-// Settings modal (gear icon): audio device and routing, latency/xruns, watched folders, footswitch and MIDI status.
+// Settings modal (gear icon): audio device and routing, latency/xruns, watched folders, footswitch and MIDI status,
+// a manually chosen footswitch device, and plugins disabled after a crash.
 
 import { call, invokeNative } from '../bridge';
 import { el, openModal, toast } from '../dialog';
@@ -17,6 +18,9 @@ export function openSettings() {
   const status = el('div', { class: 'settings-status' });
   const folders = el('div', { class: 'settings-folders' });
   const controls = el('div', { class: 'settings-controls' });
+  const deviceBox = el('div', { class: 'footswitch-device' });
+  const disabled = el('div', { class: 'settings-disabled' }, el('p', { class: 'muted' }, 'Loading…'));
+  let keyboards: HidKeyboard[] | null = null; // listed on request (Choose device…)
 
   const unsubscribe = store.subscribe((s) => renderLive(s));
   const modal = openModal('Settings', () => {
@@ -30,7 +34,8 @@ export function openSettings() {
   modal.body.append(
     section('Audio', form, status),
     section('Watched folders', folders),
-    section('Footswitch & MIDI', controls),
+    section('Footswitch & MIDI', controls, deviceBox),
+    section('Disabled plugins', disabled),
   );
 
   let lastDeviceStatus = store.get().deviceStatus.status;
@@ -62,6 +67,61 @@ export function openSettings() {
     setSettings(s);
     renderForm();
     renderFolders();
+    renderDevice();
+  }
+
+  function renderDevice() {
+    const chosen = settings?.footswitchDevice ?? null;
+    const choose = el('button', { class: 'button small' }, 'Choose device…');
+    choose.disabled = busy;
+    choose.addEventListener('click', async () => {
+      try {
+        keyboards = (await call<{ keyboards: HidKeyboard[] }>('listHidKeyboards')).keyboards;
+      } catch (e) {
+        toast((e as Error).message);
+      }
+      renderDevice();
+    });
+    deviceBox.replaceChildren(
+      ...footswitchDeviceView(chosen, keyboards, {
+        use: (k) => void apply({ footswitchDevice: { vid: k.vid, pid: k.pid } }),
+        clear: () => void apply({ footswitchDevice: null }),
+      }),
+      choose,
+    );
+  }
+
+  async function loadDisabled() {
+    try {
+      showDisabled((await call<{ plugins: DisabledPlugin[] }>('listBlacklisted')).plugins);
+    } catch (e) {
+      disabled.replaceChildren(el('p', { class: 'muted' }, (e as Error).message));
+    }
+  }
+
+  function showDisabled(list: DisabledPlugin[]) {
+    if (list.length === 0) {
+      disabled.replaceChildren(el('p', { class: 'muted' }, 'No disabled plugins.'));
+      return;
+    }
+    disabled.replaceChildren(
+      el('p', { class: 'muted' }, 'These plugins crashed AMPerator and were switched off. Retry re-enables one (rescan plugins if it does not show up).'),
+      el(
+        'ul',
+        { class: 'folder-list' },
+        ...list.map((p) => {
+          const retry = el('button', { class: 'button small', title: p.id }, 'Retry');
+          retry.addEventListener('click', async () => {
+            try {
+              showDisabled((await call<{ plugins: DisabledPlugin[] }>('unblacklistPlugin', { id: p.id })).plugins);
+            } catch (e) {
+              toast((e as Error).message);
+            }
+          });
+          return el('li', {}, el('span', { class: 'path', title: p.id }, p.name), retry);
+        }),
+      ),
+    );
   }
 
   async function apply(patch: Partial<Settings>) {
@@ -177,6 +237,57 @@ export function openSettings() {
 
   renderLive(store.get());
   void load();
+  void loadDisabled();
+}
+
+interface DisabledPlugin {
+  id: string;
+  name: string;
+}
+
+export interface HidKeyboard {
+  vid: number;
+  pid: number;
+  id: string; // "vvvv:pppp"
+  manufacturer: string;
+  product: string;
+}
+
+const usbId = (vid: number, pid: number) => `${vid.toString(16).padStart(4, '0')}:${pid.toString(16).padStart(4, '0')}`;
+
+/** The manually chosen footswitch (if any) and, once listed, the connected keyboards to pick from. */
+export function footswitchDeviceView(
+  chosen: { vid: number; pid: number } | null,
+  keyboards: HidKeyboard[] | null,
+  actions: { use(k: HidKeyboard): void; clear(): void },
+): Node[] {
+  const out: Node[] = [el('h4', {}, 'Footswitch device')];
+  if (chosen) {
+    const clear = el('button', { class: 'button small' }, 'Clear');
+    clear.addEventListener('click', () => actions.clear());
+    out.push(el('p', {}, `Chosen: ${usbId(chosen.vid, chosen.pid)} `, clear));
+  } else {
+    out.push(el('p', { class: 'muted' }, 'Not recognised automatically? Choose your footswitch from the connected keyboards.'));
+  }
+  if (keyboards) {
+    out.push(
+      keyboards.length === 0
+        ? el('p', { class: 'muted' }, 'No keyboard-type USB devices found.')
+        : el(
+            'ul',
+            { class: 'folder-list' },
+            ...keyboards.map((k) => {
+              const isChosen = !!chosen && chosen.vid === k.vid && chosen.pid === k.pid;
+              const use = el('button', { class: 'button small' }, isChosen ? 'In use' : 'Use as footswitch');
+              use.disabled = isChosen;
+              use.addEventListener('click', () => actions.use(k));
+              const label = [k.manufacturer, k.product].filter(Boolean).join(' ') || 'USB keyboard';
+              return el('li', {}, el('span', { class: 'path', title: k.id }, `${label} (${k.id})`), use);
+            }),
+          ),
+    );
+  }
+  return out;
 }
 
 function section(title: string, ...content: Node[]) {

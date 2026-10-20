@@ -57,3 +57,15 @@ export async function saveRigAs(ask: SaveAsPrompt = promptSaveAs): Promise<void>
     toast(`Couldn't save: ${(e as Error).message}`);
   }
 }
+
+/** Re-enables a plugin that was disabled after a crash. Resolves true on success. */
+export async function retryBlacklistedPlugin(id: string): Promise<boolean> {
+  try {
+    await call('unblacklistPlugin', { id });
+    toast('Plugin re-enabled. Rescan plugins if it does not show up.', 'info', 6000);
+    return true;
+  } catch (e) {
+    toast((e as Error).message);
+    return false;
+  }
+}

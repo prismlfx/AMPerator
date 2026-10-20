@@ -193,6 +193,32 @@ TEST_CASE("control_input: only footswitch-like keyboards are eligible")
     CHECK_FALSE(isEligibleFootswitch(0x0c45, 0x7403, 0x01, 0x02, "FootSwitch"));
 }
 
+TEST_CASE("control_input: a keyboard the user picked is eligible, others still are not")
+{
+    const std::optional<std::pair<uint16_t, uint16_t>> picked { { 0x1234, 0x5678 } };
+    CHECK(isEligibleFootswitch(0x1234, 0x5678, 0x01, 0x06, "Generic USB Keyboard", picked));
+    CHECK_FALSE(isEligibleFootswitch(0x1234, 0x5678, 0x01, 0x02, "Generic USB Keyboard", picked)); // not its keyboard collection
+    CHECK_FALSE(isEligibleFootswitch(0x1234, 0x9999, 0x01, 0x06, "Generic USB Keyboard", picked));
+    CHECK_FALSE(isEligibleFootswitch(0x05ac, 0x0342, 0x01, 0x06, "Apple Internal Keyboard / Trackpad", picked));
+    CHECK(isEligibleFootswitch(0x0c45, 0x7403, 0x01, 0x06, "", picked)); // the automatic rules still apply
+    CHECK_FALSE(isEligibleFootswitch(0x1234, 0x5678, 0x01, 0x06, "Generic USB Keyboard", std::nullopt));
+}
+
+TEST_CASE("control_input: keyboard listing keeps one entry per vendor/product, keyboard collections only")
+{
+    std::vector<HidKeyboardInfo> raw {
+        { 0x1234, 0x5678, "Acme", "Pedal", 0x01, 0x06 },
+        { 0x1234, 0x5678, "Acme", "Pedal", 0x01, 0x06 }, // second interface of the same device
+        { 0x1234, 0x5678, "Acme", "Pedal", 0x01, 0x02 }, // its mouse collection
+        { 0x05ac, 0x0342, "Apple", "Internal Keyboard", 0x01, 0x06 },
+    };
+    const auto list = keyboardsOnly(raw);
+    REQUIRE(list.size() == 2);
+    CHECK(list[0].vendorId == 0x1234);
+    CHECK(list[0].product == "Pedal");
+    CHECK(list[1].vendorId == 0x05ac);
+}
+
 // --- MIDI translation --------------------------------------------------------------------------
 
 TEST_CASE("control_input: midi CC 127 then 0 -> pressed then released")

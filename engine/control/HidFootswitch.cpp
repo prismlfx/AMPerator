@@ -86,10 +86,13 @@ std::optional<std::set<uint8_t>> parseKeyboardReport(const uint8_t* data, size_t
 }
 
 bool isEligibleFootswitch(uint16_t vendorId, uint16_t productId, uint16_t usagePage, uint16_t usage,
-                          const juce::String& product)
+                          const juce::String& product, const std::optional<UsbIds>& userDevice)
 {
     if (usagePage != 0x01 || usage != 0x06) // Generic Desktop / Keyboard collection only
         return false;
+
+    if (userDevice && userDevice->first == vendorId && userDevice->second == productId)
+        return true;
 
     for (auto [vid, pid] : HidFootswitch::knownDevices())
         if (vid == vendorId && pid == productId)
@@ -101,10 +104,27 @@ bool isEligibleFootswitch(uint16_t vendorId, uint16_t productId, uint16_t usageP
     return false;
 }
 
+std::vector<HidKeyboardInfo> keyboardsOnly(const std::vector<HidKeyboardInfo>& all)
+{
+    std::vector<HidKeyboardInfo> out;
+    for (const auto& d : all)
+        if (d.usagePage == 0x01 && d.usage == 0x06
+            && std::none_of(out.begin(), out.end(), [&](const HidKeyboardInfo& o)
+                            { return o.vendorId == d.vendorId && o.productId == d.productId; }))
+            out.push_back(d);
+    return out;
+}
+
 // --- HidFootswitch -----------------------------------------------------------------------------
 
 namespace
 {
+std::mutex& enumerationLock() // hid_init / hid_enumerate from the reader thread and the message thread
+{
+    static std::mutex m;
+    return m;
+}
+
 constexpr int rescanIntervalMs = 2000;
 constexpr int readTimeoutMs = 100;
 
@@ -214,16 +234,45 @@ std::optional<uint8_t> HidFootswitch::lastUnassignedKey() const
     return detector.lastUnassignedKey();
 }
 
+void HidFootswitch::setUserDevice(std::optional<UsbIds> ids)
+{
+    std::lock_guard lock(userDeviceLock);
+    userDevice = ids;
+}
+
+std::vector<HidKeyboardInfo> HidFootswitch::enumerateDevices()
+{
+    std::vector<HidKeyboardInfo> out;
+    std::lock_guard lock(enumerationLock());
+    if (hid_init() != 0)
+        return out;
+    auto* list = hid_enumerate(0, 0);
+    for (auto* d = list; d != nullptr; d = d->next)
+        out.push_back({ d->vendor_id, d->product_id,
+                        d->manufacturer_string != nullptr ? juce::String(d->manufacturer_string) : juce::String(),
+                        d->product_string != nullptr ? juce::String(d->product_string) : juce::String(),
+                        d->usage_page, d->usage });
+    hid_free_enumeration(list);
+    return out;
+}
+
 hid_device* HidFootswitch::tryOpen()
 {
     bool eligibleSeen = false, permissionHint = false;
     hid_device* opened = nullptr;
+    std::optional<UsbIds> picked;
+    {
+        std::lock_guard lock(userDeviceLock);
+        picked = userDevice;
+    }
 
+    std::unique_lock enumLock(enumerationLock());
     auto* list = hid_enumerate(0, 0);
+    enumLock.unlock();
     for (auto* d = list; d != nullptr && opened == nullptr; d = d->next)
     {
         juce::String product = d->product_string != nullptr ? juce::String(d->product_string) : juce::String();
-        if (!isEligibleFootswitch(d->vendor_id, d->product_id, d->usage_page, d->usage, product))
+        if (!isEligibleFootswitch(d->vendor_id, d->product_id, d->usage_page, d->usage, product, picked))
             continue;
         eligibleSeen = true;
 
@@ -309,7 +358,10 @@ void HidFootswitch::releaseHeldKeys()
 
 void HidFootswitch::run()
 {
-    hid_init();
+    {
+        std::lock_guard lock(enumerationLock());
+        hid_init();
+    }
     hid_device* device = nullptr;
     uint8_t buffer[64];
 

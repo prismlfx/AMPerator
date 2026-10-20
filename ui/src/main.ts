@@ -19,7 +19,7 @@ import { mountLearnOverlay, renderEdit } from './views/edit';
 import { renderStage } from './views/stage';
 import { onLibraryToggle, renderLibrary, toggleLibrary } from './views/library';
 import { openSettings } from './views/settings';
-import { saveRigAs, watchQuitRequests } from './rigActions';
+import { retryBlacklistedPlugin, saveRigAs, watchQuitRequests } from './rigActions';
 
 const app = document.getElementById('app')!;
 
@@ -175,6 +175,13 @@ function renderBanners(s: AppState) {
         }
       });
       items.push(banner(`Couldn't open '${rigId}': ${e.message}`, dismiss, restore));
+    } else if (e.context === 'pluginBlacklisted' && e.pluginId) {
+      const retry = el('button', { class: 'button small' }, 'Retry');
+      const pluginId = e.pluginId;
+      retry.addEventListener('click', async () => {
+        if (await retryBlacklistedPlugin(pluginId)) dismiss();
+      });
+      items.push(banner(e.message, dismiss, retry));
     } else {
       items.push(banner(e.message, dismiss));
     }

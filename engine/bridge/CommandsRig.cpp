@@ -38,6 +38,7 @@ CommandResult Engine::listRigs()
 
 CommandResult Engine::loadRig(const juce::String& id)
 {
+    assets.rescan(); // assets added since the last scan resolve without a relaunch
     auto parsed = store.load(id);
     if (! parsed.rig)
         return CommandResult::failure(parsed.error);
@@ -51,6 +52,7 @@ CommandResult Engine::loadRig(const juce::String& id)
 
 CommandResult Engine::newRig(const juce::String& name, const juce::String& band)
 {
+    assets.rescan();
     const auto doc = makeDefaultRig(name.trim().isNotEmpty() ? name.trim() : juce::String("New Rig"),
                                     band.trim().isNotEmpty() ? band.trim() : juce::String("My Tones"));
     if (auto error = installRig(doc, false, false); error.isNotEmpty())
@@ -200,6 +202,7 @@ CommandResult Engine::addNode(NodeType type, int index, const juce::var& plugin,
         const auto kind = assetKindFor(type);
         if (kind.isEmpty())
             return CommandResult::failure("node type " + json::nodeTypeName(type) + " takes no asset");
+        assets.rescan();
         node.asset = assetRefFor(kind, assetFile);
         if (! node.asset)
             return CommandResult::failure("not in the asset library: " + assetFile);
@@ -239,6 +242,7 @@ CommandResult Engine::setAsset(const juce::String& id, const juce::String& file)
     std::optional<AssetRef> ref; // empty file clears the asset
     if (file.isNotEmpty())
     {
+        assets.rescan();
         ref = assetRefFor(kind, file);
         if (! ref)
             return CommandResult::failure("not in the asset library: " + file);

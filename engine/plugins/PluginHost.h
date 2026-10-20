@@ -79,7 +79,10 @@ public:
     void scan(std::function<void(float)> progress);
     // Call once at launch, before scan()/create(): a leftover crash marker or dead-man's pedal entry
     // means that plugin took the app down last time; its id goes into blacklist.txt and the files are removed.
-    void checkCrashMarkerOnStartup();
+    // Returns the ids it blacklisted now (empty when the last run ended cleanly).
+    juce::StringArray checkCrashMarkerOnStartup();
+    // A readable name for a blacklist id: the known plugin's name, else the plugin file's name, else the id.
+    juce::String displayNameFor(const juce::String& id) const;
     juce::Array<juce::PluginDescription> available() const; // excludes blacklisted
     juce::StringArray blacklisted() const;
     void unblacklist(const juce::String& id);

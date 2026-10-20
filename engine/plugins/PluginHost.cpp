@@ -255,20 +255,37 @@ void PluginHost::scan(std::function<void(float)> progress)
         progress(1.0f);
 }
 
-void PluginHost::checkCrashMarkerOnStartup()
+juce::StringArray PluginHost::checkCrashMarkerOnStartup()
 {
+    juce::StringArray added;
+    const auto note = [&](const juce::String& id)
+    {
+        if (id.isNotEmpty() && ! blacklist.contains(id))
+            added.add(id);
+        addToBlacklist(id);
+    };
     const auto marker = dataDir.getChildFile(kCrashMarkerFile);
     if (marker.exists())
     {
-        if (const auto id = marker.loadFileAsString().trim(); id.isNotEmpty())
-            addToBlacklist(id);
+        note(marker.loadFileAsString().trim());
         marker.deleteFile();
     }
 
     const auto pedal = dataDir.getChildFile(kDeadMansPedalFile);
     for (const auto& id : readIds(pedal))
-        addToBlacklist(id);
+        note(id);
     pedal.deleteFile();
+    return added;
+}
+
+juce::String PluginHost::displayNameFor(const juce::String& id) const
+{
+    for (const auto& d : known.getTypes())
+        if (d.createIdentifierString() == id || d.fileOrIdentifier == id)
+            return d.name;
+    if (juce::File::isAbsolutePath(id))
+        return juce::File(id).getFileNameWithoutExtension();
+    return id;
 }
 
 juce::Array<juce::PluginDescription> PluginHost::available() const

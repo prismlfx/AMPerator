@@ -51,6 +51,7 @@ struct SettingsPatch
     std::optional<juce::StringArray> watchedFolders;
     std::optional<std::vector<Mapping>> globalMappings;
     std::optional<std::map<int, juce::String>> footswitchKeys;
+    std::optional<std::optional<UsbIds>> footswitchDevice; // set to nullopt-inside = clear
 };
 
 /** The facade the app owns: wires every engine unit together and serves the JSON bridge.
@@ -149,6 +150,11 @@ public:
     CommandResult listAssets(const juce::String& kind);
     CommandResult listPlugins();
     CommandResult rescanPlugins();
+    CommandResult listBlacklisted();
+    /** Removes `id` from the blacklist (the plugin may need a rescan to show up again). Result: listBlacklisted. */
+    CommandResult unblacklistPlugin(const juce::String& id);
+    /** Connected keyboard-type HID devices, for picking the footswitch manually (empty while controls are off). */
+    CommandResult listHidKeyboards();
     CommandResult openPluginEditor(const juce::String& id);
     CommandResult getSettings();
     CommandResult setSettings(const SettingsPatch&);

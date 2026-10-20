@@ -85,7 +85,14 @@ Engine::Engine(Options o)
 
     // Plugins are not scanned at startup (rescanPlugins does that); a leftover crash marker blacklists its plugin.
     plugins = std::make_unique<PluginHost>(dataDir, std::move(o.pluginFormats), o.addDefaultPluginFormats);
-    plugins->checkCrashMarkerOnStartup();
+    for (const auto& id : plugins->checkCrashMarkerOnStartup())
+    {
+        auto e = json::object({ { "message", plugins->displayNameFor(id) + " crashed last time and was disabled" },
+                                { "context", "pluginBlacklisted" },
+                                { "pluginId", id } });
+        startupErrors.add(e);
+        bridge().emit("error", e);
+    }
     loader = std::make_unique<RigLoader>(assets, *plugins);
 
     mapping.onBypassChanged = [this](const juce::String& node, bool bypass)
@@ -125,6 +132,7 @@ Engine::Engine(Options o)
     loadInitialRig();
 
     hid.setKeyAssignments(settings.footswitchKeys);
+    hid.setUserDevice(settings.footswitchDevice);
     if (controlsEnabled)
     {
         hid.onEvent = [this](const ControlEvent& e)

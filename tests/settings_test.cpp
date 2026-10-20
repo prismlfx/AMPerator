@@ -135,3 +135,20 @@ TEST_CASE("settings: a corrupt file is kept as settings.json.corrupt")
     REQUIRE(kept.loadFileAsString() == "{ not json at all");
     REQUIRE(t.dir.getChildFile("settings.json.corrupt.2").loadFileAsString() == "[1,2,3]");
 }
+
+TEST_CASE("settings: the manually chosen footswitch device round trips")
+{
+    TempDir t;
+    auto f = t.dir.getChildFile("settings.json");
+    amp::Settings s;
+    REQUIRE_FALSE(s.footswitchDevice.has_value());
+    s.footswitchDevice = std::make_pair<uint16_t, uint16_t>(0x1234, 0xabcd);
+    REQUIRE(s.save(f));
+    auto loaded = amp::Settings::load(f);
+    REQUIRE(loaded.footswitchDevice.has_value());
+    REQUIRE(loaded.footswitchDevice->first == 0x1234);
+    REQUIRE(loaded.footswitchDevice->second == 0xabcd);
+
+    f.replaceWithText(R"({"footswitchDevice": {"vid": "x", "pid": 3}})");
+    REQUIRE_FALSE(amp::Settings::load(f).footswitchDevice.has_value());
+}

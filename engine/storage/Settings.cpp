@@ -114,6 +114,15 @@ Settings Settings::load(const juce::File& file)
     trimRecent(s.recentRigIds);
     s.footswitchKeys = readFootswitchKeys(root, s.footswitchKeys);
 
+    if (auto* dev = root.getProperty("footswitchDevice", juce::var()).getDynamicObject())
+    {
+        const auto vid = dev->getProperty("vid"), pid = dev->getProperty("pid");
+        auto valid = [](const juce::var& v) { return (v.isInt() || v.isInt64() || v.isDouble()) && (double) v >= 0 && (double) v <= 0xffff
+                                                     && juce::exactlyEqual((double) v, std::floor((double) v)); };
+        if (valid(vid) && valid(pid))
+            s.footswitchDevice = std::make_pair((uint16_t) (int) vid, (uint16_t) (int) pid);
+    }
+
     if (auto* arr = root.getProperty("globalMappings", juce::var()).getArray())
         for (auto& m : *arr)
         {
@@ -156,6 +165,13 @@ bool Settings::save(const juce::File& file) const
     for (auto& [code, control] : footswitchKeys)
         keys->setProperty("0x" + juce::String::toHexString(code).paddedLeft('0', 2), control);
     obj->setProperty("footswitchKeys", juce::var(keys));
+    if (footswitchDevice)
+    {
+        auto* dev = new juce::DynamicObject();
+        dev->setProperty("vid", (int) footswitchDevice->first);
+        dev->setProperty("pid", (int) footswitchDevice->second);
+        obj->setProperty("footswitchDevice", juce::var(dev));
+    }
 
     if (!file.getParentDirectory().createDirectory())
         return false;

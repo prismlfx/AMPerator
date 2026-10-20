@@ -24,6 +24,7 @@ CommandResult Engine::listAssets(const juce::String& kind)
 {
     if (kind != "nam" && kind != "ir")
         return CommandResult::failure("unknown asset kind: " + kind + " (expected \"nam\" or \"ir\")");
+    assets.rescan(); // files dropped into Models/, IRs/ or a watched folder since the last scan (hashes are cached)
     juce::Array<juce::var> out;
     for (auto& e : assets.list(kind))
         out.add(json::asset(e));
@@ -42,6 +43,36 @@ CommandResult Engine::rescanPlugins()
 {
     plugins->scan([](float) {}); // blocks the message thread for the whole scan (in-process)
     return listPlugins();
+}
+
+CommandResult Engine::listBlacklisted()
+{
+    juce::Array<juce::var> out;
+    for (const auto& id : plugins->blacklisted())
+        out.add(json::object({ { "id", id }, { "name", plugins->displayNameFor(id) } }));
+    return CommandResult::success(json::object({ { "plugins", out } }));
+}
+
+CommandResult Engine::unblacklistPlugin(const juce::String& id)
+{
+    if (! plugins->blacklisted().contains(id))
+        return CommandResult::failure("not a disabled plugin: " + id);
+    plugins->unblacklist(id);
+    return listBlacklisted();
+}
+
+CommandResult Engine::listHidKeyboards()
+{
+    juce::Array<juce::var> out;
+    if (controlsEnabled) // tests and headless runs never touch the machine's HID devices
+        for (const auto& k : keyboardsOnly(HidFootswitch::enumerateDevices()))
+            out.add(json::object({ { "vid", (int) k.vendorId },
+                                   { "pid", (int) k.productId },
+                                   { "id", juce::String::toHexString((int) k.vendorId).paddedLeft('0', 4) + ":"
+                                               + juce::String::toHexString((int) k.productId).paddedLeft('0', 4) },
+                                   { "manufacturer", k.manufacturer },
+                                   { "product", k.product } }));
+    return CommandResult::success(json::object({ { "keyboards", out } }));
 }
 
 CommandResult Engine::openPluginEditor(const juce::String& id)
@@ -121,6 +152,11 @@ CommandResult Engine::setSettings(const SettingsPatch& p)
     {
         settings.footswitchKeys = *p.footswitchKeys;
         hid.setKeyAssignments(settings.footswitchKeys);
+    }
+    if (p.footswitchDevice)
+    {
+        settings.footswitchDevice = *p.footswitchDevice;
+        hid.setUserDevice(settings.footswitchDevice);
     }
     saveSettings();
     pollStatus();

@@ -970,3 +970,77 @@ TEST_CASE("bridge: setSettings retries opening the device when it is not running
     REQUIRE(f.state()["deviceStatus"]["status"].toString() == "Running");
     CHECK(f.manager->getCurrentAudioDevice()->getName() == "Fake Solo");
 }
+
+TEST_CASE("bridge: assets dropped into the library after start are found without a relaunch")
+{
+    Fixture f;
+    CHECK(f.ok("listAssets", obj({ { "kind", "nam" } }))["assets"].size() == 0);
+    const auto model = f.lib.getChildFile("Models").getChildFile("late.nam");
+    REQUIRE(fixture("tiny.nam").copyFileTo(model));
+    auto assets = f.ok("listAssets", obj({ { "kind", "nam" } }))["assets"];
+    REQUIRE(assets.size() == 1);
+    CHECK(assets[0]["file"].toString() == model.getFullPathName());
+
+    // setAsset resolves against a fresh scan too (no listAssets in between).
+    const auto ir = f.lib.getChildFile("IRs").getChildFile("late.wav");
+    REQUIRE(fixture("ir_48k.wav").copyFileTo(ir));
+    f.ok("setAsset", obj({ { "id", f.nodeOfType("CabIR") }, { "file", ir.getFullPathName() } }));
+    CHECK(f.lastEvent("rigLoaded")["report"]["missingAssets"].size() == 0);
+}
+
+TEST_CASE("bridge: a plugin blacklisted after a crash is reported at startup and can be retried")
+{
+    Fixture f;
+    const auto gain = fakeGain(f); // scans: the plugin is known from now on
+    const auto uid = gain["uid"].toString();
+    CHECK(f.ok("listBlacklisted")["plugins"].size() == 0);
+
+    f.engine.reset();
+    REQUIRE(f.data.getChildFile("crash-marker").replaceWithText(uid)); // the last run died inside that plugin
+    f.start();
+
+    auto st = f.state();
+    juce::var entry;
+    for (auto& e : *st["startupErrors"].getArray())
+        if (e["context"].toString() == "pluginBlacklisted")
+            entry = e;
+    REQUIRE(entry.isObject());
+    CHECK(entry["message"].toString() == "FakeGain crashed last time and was disabled");
+    CHECK(entry["pluginId"].toString() == uid);
+
+    auto listed = f.ok("listBlacklisted")["plugins"];
+    REQUIRE(listed.size() == 1);
+    CHECK(listed[0]["id"].toString() == uid);
+    CHECK(listed[0]["name"].toString() == "FakeGain");
+    for (auto& p : *f.ok("listPlugins")["plugins"].getArray())
+        CHECK(p["uid"].toString() != uid);
+
+    auto r = f.ok("unblacklistPlugin", obj({ { "id", uid } }));
+    CHECK(r["plugins"].size() == 0);
+    CHECK(f.ok("listBlacklisted")["plugins"].size() == 0);
+    bool available = false;
+    for (auto& p : *f.ok("listPlugins")["plugins"].getArray())
+        available = available || p["uid"].toString() == uid;
+    CHECK(available);
+    CHECK_FALSE(static_cast<bool>(f.call("unblacklistPlugin", obj({ { "id", "" } }))["ok"]));
+}
+
+TEST_CASE("bridge: the footswitch device can be picked manually and is persisted")
+{
+    Fixture f;
+    CHECK(f.ok("listHidKeyboards")["keyboards"].size() == 0); // controls are off in tests: nothing is enumerated
+    CHECK(f.ok("getSettings")["footswitchDevice"].isVoid());
+
+    auto r = f.ok("setSettings", obj({ { "footswitchDevice", obj({ { "vid", 0x1234 }, { "pid", 0xabcd } }) } }));
+    CHECK(static_cast<int>(r["footswitchDevice"]["vid"]) == 0x1234);
+    CHECK(static_cast<int>(r["footswitchDevice"]["pid"]) == 0xabcd);
+    auto saved = Settings::load(f.data.getChildFile("settings.json"));
+    REQUIRE(saved.footswitchDevice.has_value());
+    CHECK(saved.footswitchDevice->first == 0x1234);
+
+    CHECK_FALSE(static_cast<bool>(f.call("setSettings", obj({ { "footswitchDevice", obj({ { "vid", 70000 }, { "pid", 1 } }) } }))["ok"]));
+
+    r = f.ok("setSettings", obj({ { "footswitchDevice", juce::var() } }));
+    CHECK(r["footswitchDevice"].isVoid());
+    CHECK_FALSE(Settings::load(f.data.getChildFile("settings.json")).footswitchDevice.has_value());
+}

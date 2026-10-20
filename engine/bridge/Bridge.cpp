@@ -172,6 +172,21 @@ SettingsPatch settingsPatch(const juce::var& a)
         p.globalMappings = mappingList(a, "globalMappings");
     if (a.hasProperty("footswitchKeys"))
         p.footswitchKeys = keyMap(a, "footswitchKeys");
+    if (a.hasProperty("footswitchDevice"))
+    {
+        const auto d = a["footswitchDevice"];
+        if (d.isVoid())
+            p.footswitchDevice = std::optional<UsbIds>(); // null clears
+        else
+        {
+            if (! isJsonObject(d))
+                throw ArgError("argument \"footswitchDevice\" must be {vid, pid} or null");
+            const int vid = integer(d, "vid"), pid = integer(d, "pid");
+            if (vid < 0 || vid > 0xffff || pid < 0 || pid > 0xffff)
+                throw ArgError("argument \"footswitchDevice\" out of range (vid and pid are 16-bit USB ids)");
+            p.footswitchDevice = std::optional<UsbIds>(UsbIds { (uint16_t) vid, (uint16_t) pid });
+        }
+    }
     return p;
 }
 
@@ -218,6 +233,9 @@ const std::map<juce::String, Handler>& commands()
         { "listAssets", [](Engine& e, const juce::var& a) { return e.listAssets(str(a, "kind")); } },
         { "listPlugins", [](Engine& e, const juce::var&) { return e.listPlugins(); } },
         { "rescanPlugins", [](Engine& e, const juce::var&) { return e.rescanPlugins(); } },
+        { "listBlacklisted", [](Engine& e, const juce::var&) { return e.listBlacklisted(); } },
+        { "unblacklistPlugin", [](Engine& e, const juce::var& a) { return e.unblacklistPlugin(nonEmpty(a, "id")); } },
+        { "listHidKeyboards", [](Engine& e, const juce::var&) { return e.listHidKeyboards(); } },
         { "openPluginEditor", [](Engine& e, const juce::var& a) { return e.openPluginEditor(nonEmpty(a, "id")); } },
         { "getSettings", [](Engine& e, const juce::var&) { return e.getSettings(); } },
         { "setSettings", [](Engine& e, const juce::var& a) { return e.setSettings(settingsPatch(a)); } },
@@ -358,6 +376,9 @@ juce::var settings(const Settings& s)
     auto keys = object();
     for (auto& [code, control] : s.footswitchKeys)
         keys.getDynamicObject()->setProperty("0x" + juce::String::toHexString(code).paddedLeft('0', 2), control);
+    auto device = juce::var();
+    if (s.footswitchDevice)
+        device = object({ { "vid", (int) s.footswitchDevice->first }, { "pid", (int) s.footswitchDevice->second } });
     return object({ { "audioDeviceType", s.audioDeviceType },
                     { "audioDeviceName", s.audioDeviceName },
                     { "inputChannel", s.inputChannel },
@@ -366,7 +387,8 @@ juce::var settings(const Settings& s)
                     { "bufferSize", s.bufferSize },
                     { "watchedFolders", strings(s.watchedFolders) },
                     { "globalMappings", mappings(s.globalMappings) },
-                    { "footswitchKeys", keys } });
+                    { "footswitchKeys", keys },
+                    { "footswitchDevice", device } });
 }
 
 juce::var rig(const RigDocument& doc, const std::function<juce::var(const NodeDoc&)>& artFor)

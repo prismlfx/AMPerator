@@ -67,3 +67,13 @@ describe('save as', () => {
     expect(juce.commands().map((c) => c.cmd)).toEqual(['getState']);
   });
 });
+
+describe('disabled plugin retry', () => {
+  it('unblacklists the plugin and resolves true', async () => {
+    const done = actions.retryBlacklistedPlugin('VST3-Bad-1');
+    expect(lastCommand()).toMatchObject({ cmd: 'unblacklistPlugin', args: { id: 'VST3-Bad-1' } });
+    juce.reply(lastCommand().id, true, { plugins: [] });
+    expect(await done).toBe(true);
+    expect(document.querySelector('.toast')!.textContent).toContain('Rescan');
+  });
+});

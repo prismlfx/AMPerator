@@ -48,11 +48,24 @@ private:
     (any other length or report ID, or the "phantom" rollover-error state). */
 std::optional<std::set<uint8_t>> parseKeyboardReport(const uint8_t* data, size_t length);
 
-/** True only for the keyboard collection (usage page 0x01, usage 0x06) of a device on the known list or whose product
-    string names a footswitch ("FootSwitch", "Foot Switch", "PCsensor", any case). Never matches an ordinary keyboard.
-    (A user-editable allow-list in settings would be the way to add other models; out of scope for v1.) */
+using UsbIds = std::pair<uint16_t, uint16_t>; // vendor id, product id
+
+/** True only for the keyboard collection (usage page 0x01, usage 0x06) of a device on the known list, whose product
+    string names a footswitch ("FootSwitch", "Foot Switch", "PCsensor", any case), or that the user picked
+    (`userDevice`, Settings::footswitchDevice). Never matches an ordinary keyboard the user did not pick. */
 bool isEligibleFootswitch(uint16_t vendorId, uint16_t productId, uint16_t usagePage, uint16_t usage,
-                          const juce::String& product);
+                          const juce::String& product, const std::optional<UsbIds>& userDevice = std::nullopt);
+
+/** One HID collection as hidapi enumerates it. */
+struct HidKeyboardInfo
+{
+    uint16_t vendorId = 0, productId = 0;
+    juce::String manufacturer, product;
+    uint16_t usagePage = 0, usage = 0;
+};
+
+/** The keyboard collections (usage page 0x01, usage 0x06) in `all`, one entry per vendor/product id, in order. */
+std::vector<HidKeyboardInfo> keyboardsOnly(const std::vector<HidKeyboardInfo>& all);
 
 /** Reads a USB footswitch (a HID keyboard) directly via hidapi, so presses keep working while the app is in the
     background. Reading happens on a background thread; it rescans every 2 s while no device is open (hot-plug).
@@ -83,6 +96,12 @@ public:
     /** True when the open device is seized (presses don't reach other apps). False when shared or not connected. */
     bool exclusive() const { return exclusiveOpen.load(); }
 
+    /** A keyboard the user picked as the footswitch (Settings::footswitchDevice), eligible in addition to the automatic
+        rules; nullopt = automatic rules only. Callable at any time; used by the next scan for a device. */
+    void setUserDevice(std::optional<UsbIds>);
+    /** Every connected HID collection (enumerates on the calling thread; serialised with the reader's scans). */
+    static std::vector<HidKeyboardInfo> enumerateDevices();
+
     /** Keycode -> control ID, typically Settings::footswitchKeys. Callable at any time. */
     void setKeyAssignments(const std::map<int, juce::String>& keys);
     std::optional<uint8_t> lastUnassignedKey() const;
@@ -106,6 +125,8 @@ private:
     std::atomic<Status> currentStatus { Status::NotFound };
     std::atomic<bool> exclusiveOpen { false };
     std::atomic<bool> capturing { false };
+    mutable std::mutex userDeviceLock;
+    std::optional<UsbIds> userDevice;
     mutable std::mutex detectorLock;
     KeyEdgeDetector detector;
 };

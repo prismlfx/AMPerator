@@ -54,6 +54,7 @@ export interface StartupError {
   message: string;
   context: string;
   rigId?: string;
+  pluginId?: string; // context "pluginBlacklisted"
 }
 
 export interface Settings {
@@ -66,6 +67,7 @@ export interface Settings {
   watchedFolders: string[];
   globalMappings: { control: string; action: string; node: string }[];
   footswitchKeys: Record<string, string>;
+  footswitchDevice?: { vid: number; pid: number } | null; // a keyboard picked as the footswitch
   // getSettings / setSettings only:
   availableDevices?: string[];
   availableSampleRates?: number[];

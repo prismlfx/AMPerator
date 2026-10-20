@@ -39,10 +39,13 @@ afterEach(() => {
   delete (window as any).__JUCE__;
 });
 
-async function opened() {
+const command = (name: string) => juce.commands().filter((c) => c.cmd === name).at(-1);
+
+async function opened(settings: object = baseSettings) {
   settingsView.openSettings();
-  expect(lastCommand().cmd).toBe('getSettings');
-  juce.reply(lastCommand().id, true, baseSettings);
+  const get = command('getSettings');
+  expect(get).toBeDefined();
+  juce.reply(get.id, true, settings);
   await flush();
 }
 
@@ -150,5 +153,47 @@ describe('footswitch key assignment', () => {
     document.querySelector<HTMLElement>('.modal-settings button[aria-label="Close"], .modal-settings .modal-close')?.click();
     await flush();
     expect(juce.commands().some((c) => c.cmd === 'cancelAssignFootswitchKey')).toBe(true);
+  });
+});
+
+describe('disabled plugins', () => {
+  it('lists blacklisted plugins and Retry re-enables one', async () => {
+    await opened();
+    juce.reply(command('listBlacklisted').id, true, { plugins: [{ id: 'VST3-Bad-1', name: 'Bad Synth' }] });
+    await flush();
+    const section = document.querySelector('.settings-disabled')!;
+    expect(section.textContent).toContain('Bad Synth');
+    const retry = [...section.querySelectorAll('button')].find((b) => b.textContent === 'Retry')!;
+    retry.click();
+    expect(lastCommand()).toMatchObject({ cmd: 'unblacklistPlugin', args: { id: 'VST3-Bad-1' } });
+    juce.reply(lastCommand().id, true, { plugins: [] });
+    await flush();
+    expect(section.textContent).toContain('No disabled plugins');
+  });
+});
+
+describe('footswitch device', () => {
+  const keyboards = [
+    { vid: 0x1234, pid: 0x5678, id: '1234:5678', manufacturer: 'Acme', product: 'Pedal' },
+    { vid: 0x05ac, pid: 0x0342, id: '05ac:0342', manufacturer: 'Apple', product: 'Internal Keyboard' },
+  ];
+  const deviceButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.footswitch-device button')];
+
+  it('lists connected keyboards on request and uses the chosen one as the footswitch', async () => {
+    await opened();
+    deviceButtons().find((b) => b.textContent === 'Choose device…')!.click();
+    expect(lastCommand().cmd).toBe('listHidKeyboards');
+    juce.reply(lastCommand().id, true, { keyboards });
+    await flush();
+    expect(document.querySelector('.footswitch-device')!.textContent).toContain('Acme Pedal');
+    deviceButtons().filter((b) => b.textContent === 'Use as footswitch')[0].click();
+    expect(lastCommand()).toMatchObject({ cmd: 'setSettings', args: { footswitchDevice: { vid: 0x1234, pid: 0x5678 } } });
+  });
+
+  it('shows the chosen device and can clear it', async () => {
+    await opened({ ...baseSettings, footswitchDevice: { vid: 0x1234, pid: 0x5678 } });
+    expect(document.querySelector('.footswitch-device')!.textContent).toContain('1234:5678');
+    deviceButtons().find((b) => b.textContent === 'Clear')!.click();
+    expect(lastCommand()).toMatchObject({ cmd: 'setSettings', args: { footswitchDevice: null } });
   });
 });
