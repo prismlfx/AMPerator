@@ -26,13 +26,16 @@ inline constexpr ParamRange kParamRanges[] = {
     { "Output", "level", -60.0f, 12.0f },
 };
 
-/** `value` clamped into the range of (type, name); nullopt for a non-finite value or an unknown parameter. RT-safe. */
+/** `value` clamped into the range of (type, name); nullopt for a non-finite value or an unknown parameter.
+    RT-safe: no allocation (the name is compared in place against the table). */
 inline std::optional<float> clampParam(std::string_view type, const juce::String& name, float value)
 {
+    static_assert(JUCE_STRING_UTF_TYPE == 8, "toRawUTF8() must return the String's own buffer (no conversion)");
     if (! std::isfinite(value))
         return std::nullopt;
+    const std::string_view n(name.toRawUTF8());
     for (const auto& r : kParamRanges)
-        if (r.type == type && name == juce::String(r.name.data(), r.name.size()))
+        if (r.type == type && r.name == n)
             return juce::jlimit(r.min, r.max, value);
     return std::nullopt;
 }

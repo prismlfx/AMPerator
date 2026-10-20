@@ -2,8 +2,11 @@
 #include <catch2/catch_approx.hpp>
 
 #include <cmath>
+#include <optional>
 
 #include "dsp/BuiltinNodes.h"
+#include "dsp/ParamRanges.h"
+#include "engine/RtSafety.h"
 #include "support/OfflineRender.h"
 
 namespace
@@ -172,4 +175,24 @@ TEST_CASE("builtin_nodes: params are clamped to their ranges and non-finite valu
     CHECK((float) out->getParams()["level"] == 12.0f);
     out->setParam("level", -1000.0f);
     CHECK((float) out->getParams()["level"] == -60.0f);
+}
+
+TEST_CASE("builtin_nodes: clampParam and setParam do not allocate")
+{
+    const juce::String threshold("threshold"), unknown("nope"), midFreq("midFreq");
+    auto gate = amp::makeGate();
+    gate->prepare({ 48000.0, 128 });
+    std::optional<float> a, b, c;
+    amp::RtSafety::reset();
+    {
+        const amp::RtSafety::ScopedNoAlloc guard;
+        a = amp::clampParam("Gate", threshold, -200.0f);
+        b = amp::clampParam("EQ", midFreq, 100000.0f);
+        c = amp::clampParam("Gate", unknown, 1.0f);
+        gate->setParam(threshold, -40.0f);
+    }
+    CHECK(amp::RtSafety::violations() == 0);
+    CHECK(a == -90.0f);
+    CHECK(b == 5000.0f);
+    CHECK_FALSE(c.has_value());
 }
