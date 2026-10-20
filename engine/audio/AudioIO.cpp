@@ -12,9 +12,14 @@ struct AudioIO::StartWatcher : juce::AudioIODeviceCallback
 {
     explicit StartWatcher(AudioIO& o) : owner(o) {}
 
-    void audioDeviceIOCallbackWithContext(const float* const*, int, float* const*, int, int,
+    // Not the manager's first callback, so `outputs` is its shared scratch buffer, which is summed into the device
+    // output afterwards: clear it, or whatever another callback left there would be mixed in again.
+    void audioDeviceIOCallbackWithContext(const float* const*, int, float* const* outputs, int numOutputs, int n,
                                           const juce::AudioIODeviceCallbackContext&) override
     {
+        for (int ch = 0; ch < numOutputs; ++ch)
+            if (outputs[ch] != nullptr)
+                juce::FloatVectorOperations::clear(outputs[ch], n);
     }
 
     void audioDeviceAboutToStart(juce::AudioIODevice* d) override

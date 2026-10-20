@@ -141,8 +141,20 @@ juce::File RigStore::fileFor(const juce::String& rigId) const
     for (auto& e : list())
         if (e.id == rigId)
             return e.file;
-    auto it = knownPaths_.find(rigId);
-    return it != knownPaths_.end() ? it->second : juce::File();
+    if (auto it = knownPaths_.find(rigId); it != knownPaths_.end())
+        return it->second;
+    // A rig whose file became unreadable before this process ever saw it: its backups still carry the id
+    // (newest first), and the rig file is the backup's name minus ".bak.N".
+    for (auto& band : rigsDir().findChildFiles(juce::File::findDirectories, false))
+        for (int n = 1; n <= maxBackups; ++n)
+            for (auto& b : band.findChildFiles(juce::File::findFiles, false, "*.amprig.bak." + juce::String(n)))
+                if (auto parsed = parseRig(b.loadFileAsString()); parsed.rig && parsed.rig->id == rigId)
+                {
+                    auto rig = b.getSiblingFile(b.getFileName().upToLastOccurrenceOf(".bak.", false, false));
+                    knownPaths_[rigId] = rig;
+                    return rig;
+                }
+    return juce::File();
 }
 
 ParseResult RigStore::load(const juce::String& rigId) const

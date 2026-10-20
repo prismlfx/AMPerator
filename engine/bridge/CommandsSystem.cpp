@@ -4,8 +4,22 @@
 
 #include "bridge/Bridge.h"
 
+#include <type_traits>
+
 namespace amp
 {
+namespace
+{
+template <typename T>
+bool same(const T& a, const T& b)
+{
+    if constexpr (std::is_floating_point_v<T>)
+        return juce::exactlyEqual(a, b);
+    else
+        return a == b;
+}
+} // namespace
+
 CommandResult Engine::listAssets(const juce::String& kind)
 {
     if (kind != "nam" && kind != "ir")
@@ -62,10 +76,10 @@ CommandResult Engine::getSettings()
 
 CommandResult Engine::setSettings(const SettingsPatch& p)
 {
-    bool deviceChanged = false;
+    bool deviceChanged = false; // only an actual change reopens the device
     auto set = [&deviceChanged](auto& field, const auto& value)
     {
-        if (value)
+        if (value && ! same(field, *value))
         {
             field = *value;
             deviceChanged = true;

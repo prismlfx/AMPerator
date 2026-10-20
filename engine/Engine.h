@@ -133,6 +133,8 @@ private:
     bool isPlaceholder(const juce::String& id) const;
     std::optional<bool> applyBypass(const juce::String& id, std::optional<bool> set);
     std::optional<AssetRef> assetRefFor(const juce::String& kind, const juce::String& file) const;
+    void reportError(const juce::String& message, const juce::String& context, const juce::String& rigId = {},
+                     bool atStartup = false);
 
     // Settings / status
     void saveSettings();
@@ -172,6 +174,7 @@ private:
     std::optional<LiveRig> live;
     bool dirty = false, saved = false, tunerOn = false;
     juce::var userArt; // object: "<rigId>/<nodeId>" -> file name in Art/
+    juce::Array<juce::var> startupErrors; // {message, context, rigId?}: problems found while starting (getState)
 
     juce::String lastDeviceStatus, lastControlStatus; // JSON, to emit only on change
     juce::TimedCallback meterTimer { [this] { emitMeter(); } };

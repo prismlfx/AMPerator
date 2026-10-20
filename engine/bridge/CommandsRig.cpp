@@ -130,14 +130,16 @@ CommandResult Engine::restoreBackup(const juce::String& id)
     if (! parseRig(text).rig)
         return CommandResult::failure("the newest backup cannot be read either: " + newest.getFileName());
     const auto rigFile = newest.getSiblingFile(newest.getFileName().upToLastOccurrenceOf(".bak.", false, false));
-    if (rigFile.existsAsFile() && ! parseRig(rigFile.loadFileAsString()).rig)
+    if (rigFile.existsAsFile())
     {
-        // Keep the unreadable bytes next to the rig (same naming as RigStore) instead of destroying them.
-        auto parked = rigFile.getSiblingFile(rigFile.getFileName() + ".corrupt");
+        // Never destroy the current file: keep it next to the rig, as <file>.corrupt (same naming as RigStore) when
+        // unreadable, else as <file>.replaced.
+        const auto suffix = parseRig(rigFile.loadFileAsString()).rig ? juce::String(".replaced") : juce::String(".corrupt");
+        auto parked = rigFile.getSiblingFile(rigFile.getFileName() + suffix);
         for (int n = 2; parked.exists(); ++n)
-            parked = rigFile.getSiblingFile(rigFile.getFileName() + ".corrupt." + juce::String(n));
+            parked = rigFile.getSiblingFile(rigFile.getFileName() + suffix + "." + juce::String(n));
         if (! rigFile.copyFileTo(parked))
-            return CommandResult::failure("could not keep a copy of the unreadable rig file");
+            return CommandResult::failure("could not keep a copy of the current rig file");
     }
     if (! writeFileAtomically(rigFile, text))
         return CommandResult::failure("could not restore " + rigFile.getFullPathName());
@@ -263,6 +265,7 @@ CommandResult Engine::toggleBypass(const juce::String& id)
 
 CommandResult Engine::learnMapping(const juce::String& id)
 {
+    mapping.cancelLearn(); // a new request replaces any armed learn, also when it is rejected
     mapping.beginLearn(id);
     if (! mapping.isLearning())
         return CommandResult::failure("node cannot be mapped: " + id);

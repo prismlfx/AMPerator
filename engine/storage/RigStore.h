@@ -15,8 +15,9 @@ struct RigEntry { juce::String id, name, band; juce::File file; };
     Rigs are indexed by scanning Rigs/<Band>/(star).amprig and reading each file's `id`.
     Display names/bands come from the JSON, never the file/folder name.
     Corrupt files (unparseable, no id) are skipped by list(). load(id) falls back to the path
-    remembered from the last good scan so a rig whose file was later corrupted reports a parse
-    error instead of "not found"; nothing ever rewrites a file that failed to parse unless the
+    remembered from the last good scan, else to the rig file named by a parseable backup
+    (<rig>.amprig.bak.N) with that id -- so a rig whose file was corrupted, even before this process
+    started, reports a parse error instead of "not found" and backups(id) still finds its backups; nothing ever rewrites a file that failed to parse unless the
     user saves a rig with the same id to that same path (the previous bytes are then rotated into .bak.1). */
 class RigStore
 {

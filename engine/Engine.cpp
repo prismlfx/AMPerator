@@ -36,10 +36,13 @@ juce::String hidStatusName(HidFootswitch::Status s)
 }
 } // namespace
 
-// Prepares the tuner for the device's rate whenever the device (re)starts. Registered after the AudioIO's
-// callbacks, so JUCE calls its audioDeviceAboutToStart while holding the manager's callback lock and before any
-// audio callback at the new rate: TunerTap::prepare() never overlaps TunerTap::push(). Its own audio callback only
-// clears the (temporary) output buffer it is handed.
+// Prepares the tuner for the device's rate whenever the device (re)starts, before any audio callback at the new rate.
+// Registered before the AudioIO (so before the RealtimeEngine, whose analyzerTap pushes to the tuner): when it is added
+// to an already running device, JUCE calls its audioDeviceAboutToStart outside the callback lock, but nothing pushes
+// yet; on every later (re)start JUCE calls all aboutToStart handlers under the callback lock, which the audio callback
+// also holds, so TunerTap::prepare() never overlaps TunerTap::push(). (A driver-side restart on a non-message thread
+// can still overlap the message thread's poll().) As the manager's first callback it is handed the real device
+// outputs; it clears them and the other callbacks' outputs are summed on top.
 struct Engine::TunerPreparer : juce::AudioIODeviceCallback
 {
     explicit TunerPreparer(TunerTap& t) : tuner(t) {}
@@ -108,13 +111,13 @@ Engine::Engine(Options o)
         if (o.deviceManager == nullptr)
             ownedManager = std::make_unique<juce::AudioDeviceManager>();
         manager = o.deviceManager != nullptr ? o.deviceManager : ownedManager.get();
-        audio = std::make_unique<AudioIO>(*manager, realtime);
         tunerPreparer = std::make_unique<TunerPreparer>(tuner);
         manager->addAudioCallback(tunerPreparer.get());
+        audio = std::make_unique<AudioIO>(*manager, realtime);
         audio->onStatus = [this](DeviceStatus) { pollStatus(); };
         audio->onDeviceRestarted = [this](double sr, int bs) { rebuildForDevice(sr, bs); };
         if (const auto r = audio->apply(settings); r.failed())
-            bridge().emit("error", json::object({ { "message", r.getErrorMessage() }, { "context", "audioDevice" } }));
+            reportError("Could not open the audio device: " + r.getErrorMessage(), "audioDevice", {}, true);
         audio->writeBack(settings);
     }
 
@@ -171,8 +174,12 @@ juce::String Engine::installRig(const RigDocument& doc, bool isSaved, bool isStr
         return error.isNotEmpty() ? error : juce::String("rig could not be built");
 
     if (! realtime.swapPlan(built->plan))
-        bridge().emit("error", json::object({ { "message", "the audio engine refused the new plan (sample rate mismatch)" },
-                                              { "context", "swapPlan" } }));
+    {
+        const juce::String message = "the audio engine refused the new plan (sample rate mismatch)";
+        if (live) // keep playing (and editing) the previous rig
+            return message;
+        reportError(message, "swapPlan"); // nothing to keep: install it anyway so there always is a rig
+    }
     live = std::move(*built);
     refreshMappings();
     if (isStructuralEdit)
@@ -213,23 +220,31 @@ void Engine::rebuildForDevice(double sampleRate, int bufferSize)
     auto built = loader->build(currentDoc(), spec, error);
     if (! built)
     {
-        bridge().emit("error", json::object({ { "message", error }, { "context", "deviceRestart" } }));
+        reportError(error, "deviceRestart");
         return;
     }
     if (! realtime.swapPlan(built->plan))
-        bridge().emit("error", json::object({ { "message", "the audio engine refused the rebuilt plan" },
-                                              { "context", "deviceRestart" } }));
+    {
+        reportError("the audio engine refused the rebuilt plan", "deviceRestart"); // keep the previous rig
+        return;
+    }
     live = std::move(*built);
 }
 
 void Engine::loadInitialRig()
 {
     if (settings.lastRigId.isNotEmpty())
-        if (auto parsed = store.load(settings.lastRigId); parsed.rig && installRig(*parsed.rig, true, false).isEmpty())
+    {
+        // On failure lastRigId is kept, so the rig stays recoverable (restoreBackup) and is retried next launch.
+        auto parsed = store.load(settings.lastRigId);
+        auto error = parsed.rig ? installRig(*parsed.rig, true, false) : parsed.error;
+        if (error.isEmpty())
         {
             settings.noteRecent(settings.lastRigId);
             return;
         }
+        reportError("Could not load the last rig: " + error, "loadRig", settings.lastRigId, true);
+    }
     const auto error = installRig(makeDefaultRig("New Rig", "My Tones"), false, false);
     jassert(error.isEmpty()); // the default chain is always buildable
     juce::ignoreUnused(error);
@@ -308,12 +323,23 @@ std::optional<AssetRef> Engine::assetRefFor(const juce::String& kind, const juce
     return std::nullopt;
 }
 
+void Engine::reportError(const juce::String& message, const juce::String& context, const juce::String& rigId,
+                         bool atStartup)
+{
+    auto e = json::object({ { "message", message }, { "context", context } });
+    if (rigId.isNotEmpty())
+        e.getDynamicObject()->setProperty("rigId", rigId);
+    if (atStartup)
+        startupErrors.add(e);
+    bridge().emit("error", e); // queued by the Bridge until the UI attaches
+}
+
 // ---- Settings / status ----
 
 void Engine::saveSettings()
 {
     if (! settings.save(dataDir.getChildFile("settings.json")))
-        bridge().emit("error", json::object({ { "message", "could not save settings.json" }, { "context", "settings" } }));
+        reportError("could not save settings.json", "settings");
 }
 
 void Engine::applyAssetRoots()
@@ -403,6 +429,7 @@ CommandResult Engine::getState()
         { "rig", json::rig(currentDoc(), [this](const NodeDoc& n) { return artFor(n); }) },
         { "report", json::report(live->report) },
         { "dirty", dirty },
+        { "startupErrors", startupErrors },
         { "saved", saved },
         { "learning", mapping.isLearning() },
         { "settings", getSettings().result },

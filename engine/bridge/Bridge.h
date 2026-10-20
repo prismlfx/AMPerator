@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <optional>
+#include <vector>
 
 #include "assets/AssetIndex.h"
 #include "model/RigDocument.h"
@@ -30,11 +31,15 @@ public:
     void handle(const juce::var& message);
     std::function<void(const juce::var&)> send; // replies + events
 
-    /** Sends {"v":1,"event":name,"data":data} (no-op until `send` is set). */
+    /** Sends {"v":1,"event":name,"data":data}. Before `send` is set, other events are dropped but `error` events are
+        queued and delivered (in order) ahead of the next reply or event once `send` is set. */
     void emit(const juce::String& name, const juce::var& data);
 
 private:
     void reply(const juce::var& id, bool ok, const juce::var& payload);
+    void flushPending();
+
+    std::vector<juce::var> pending; // error events emitted before `send` was set
 
     Engine& engine;
 };

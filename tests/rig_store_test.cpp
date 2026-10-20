@@ -295,3 +295,26 @@ TEST_CASE("rig_store: failed write leaves backups and rig untouched")
     REQUIRE(dir.getChildFile("Tone.amprig").loadFileAsString() == current);
 }
 #endif
+
+TEST_CASE("rig_store: fresh store finds a corrupt rig and its backups through the backups")
+{
+    TempDir t;
+    auto r = rig("Fragile");
+    {
+        amp::RigStore store(t.dir);
+        REQUIRE(store.save(r).wasOk());
+        REQUIRE(store.save(r).wasOk()); // .bak.1 now holds a parseable copy
+    }
+    const auto file = t.dir.getChildFile("Rigs/My Tones/Fragile.amprig");
+    REQUIRE(file.replaceWithText("{ broken"));
+
+    amp::RigStore fresh(t.dir); // knows no paths from earlier scans
+    CHECK(fresh.list().empty());
+    auto loaded = fresh.load(r.id);
+    CHECK_FALSE(loaded.rig.has_value());
+    CHECK_FALSE(loaded.error.startsWith("Rig not found")); // a parse error, not "not found"
+    auto backups = fresh.backups(r.id);
+    REQUIRE(backups.size() == 1);
+    CHECK(backups[0] == file.getSiblingFile("Fragile.amprig.bak.1"));
+    CHECK(file.loadFileAsString() == "{ broken");
+}

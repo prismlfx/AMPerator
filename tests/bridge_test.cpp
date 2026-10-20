@@ -169,6 +169,19 @@ TEST_CASE("bridge: missing or invalid args reply ok=false")
 
     r = f.raw(obj({ { "v", 1 }, { "cmd", "getState" }, { "id", 99 }, { "args", "nope" } }));
     CHECK_FALSE(static_cast<bool>(r["ok"]));
+
+    r = f.raw(obj({ { "v", 1 }, { "cmd", "getState" }, { "id", 100 }, { "args", juce::Array<juce::var> { 1, 2 } } }));
+    CHECK_FALSE(static_cast<bool>(r["ok"])); // an array is not an args object
+
+    r = f.call("setParam", obj({ { "id", f.nodeOfType("Gate") }, { "name", "" }, { "value", 1.0 } }));
+    CHECK_FALSE(static_cast<bool>(r["ok"]));
+    CHECK(r["error"].toString().contains("empty"));
+
+    r = f.call("loadRig", obj({ { "id", "" } }));
+    CHECK_FALSE(static_cast<bool>(r["ok"]));
+
+    r = f.call("addNode", obj({ { "type", "Plugin" }, { "index", 1 }, { "plugin", juce::Array<juce::var> { "x" } } }));
+    CHECK_FALSE(static_cast<bool>(r["ok"]));
 }
 
 TEST_CASE("bridge: getState reports protocol and a default rig on first start")
@@ -409,6 +422,51 @@ TEST_CASE("bridge: corrupt rig loadRig replies error and restoreBackup recovers 
     CHECK(f.lastEvent("rigLoaded")["rig"]["id"].toString() == id);
     CHECK(parseRig(file.loadFileAsString()).rig.has_value());
     CHECK(file.getSiblingFile("Fragile.amprig.corrupt").loadFileAsString() == "{ this is not json"); // parked, not lost
+
+    // Restoring over a readable file keeps that file too.
+    const auto current = file.loadFileAsString();
+    f.ok("restoreBackup", obj({ { "id", id } }));
+    CHECK(file.getSiblingFile("Fragile.amprig.replaced").loadFileAsString() == current);
+}
+
+TEST_CASE("bridge: rig corrupted between sessions is reported at startup and restorable")
+{
+    Fixture f;
+    f.ok("newRig", obj({ { "name", "Fragile" }, { "band", "My Tones" } }));
+    const auto id = f.state()["rig"]["id"].toString();
+    f.ok("saveRig");
+    f.ok("saveRig"); // Fragile.amprig.bak.1
+    const auto file = f.rigFile("My Tones", "Fragile");
+    REQUIRE(file.replaceWithText("{ this is not json"));
+
+    f.start(); // fresh process state: nothing remembered from the session that saved it
+    auto s = f.state();
+    CHECK(s["rig"]["id"].toString() != id); // fell back to a new default rig
+    REQUIRE(s["startupErrors"].getArray()->size() == 1);
+    auto e = s["startupErrors"][0];
+    CHECK(e["rigId"].toString() == id);
+    CHECK(e["context"].toString() == "loadRig");
+    CHECK(e["message"].toString().isNotEmpty());
+    // The same problem also arrived as an error event, queued until the UI attached.
+    REQUIRE(f.events("error").size() == 1);
+    CHECK(f.events("error")[0]["rigId"].toString() == id);
+    CHECK(file.loadFileAsString() == "{ this is not json");
+
+    f.ok("restoreBackup", obj({ { "id", id } }));
+    CHECK(f.lastEvent("rigLoaded")["rig"]["id"].toString() == id);
+    CHECK(f.state()["rig"]["name"].toString() == "Fragile");
+    CHECK(file.getSiblingFile("Fragile.amprig.corrupt").existsAsFile());
+}
+
+TEST_CASE("bridge: learnMapping replaces an armed learn and rejects unknown nodes")
+{
+    Fixture f;
+    const auto gate = f.nodeOfType("Gate");
+    f.ok("learnMapping", obj({ { "id", gate } }));
+    CHECK_FALSE(static_cast<bool>(f.call("learnMapping", obj({ { "id", "no-such-node" } }))["ok"]));
+    CHECK_FALSE(static_cast<bool>(f.state()["learning"]));
+    f.engine->injectControl({ "footswitch:M", true });
+    CHECK(f.events("learned").empty());
 }
 
 TEST_CASE("bridge: deleteRig of the current rig loads another")

@@ -19,6 +19,9 @@ struct ArgError : std::runtime_error
 
 bool isNumber(const juce::var& v) { return v.isInt() || v.isInt64() || v.isDouble(); }
 
+// juce::var::isObject() is also true for arrays; a JSON object is a DynamicObject.
+bool isJsonObject(const juce::var& v) { return v.getDynamicObject() != nullptr; }
+
 juce::String quoted(const char* key) { return "\"" + juce::String(key) + "\""; }
 
 juce::String str(const juce::var& args, const char* key)
@@ -27,6 +30,15 @@ juce::String str(const juce::var& args, const char* key)
     if (! v.isString())
         throw ArgError("missing or invalid string argument " + quoted(key));
     return v.toString();
+}
+
+// Ids and parameter names must not be empty (they become juce::Identifiers / map keys).
+juce::String nonEmpty(const juce::var& args, const char* key)
+{
+    auto s = str(args, key);
+    if (s.isEmpty())
+        throw ArgError("argument " + quoted(key) + " must not be empty");
+    return s;
 }
 
 std::optional<juce::String> optStr(const juce::var& args, const char* key)
@@ -88,9 +100,9 @@ std::vector<Mapping> mappingList(const juce::var& args, const char* key)
     std::vector<Mapping> out;
     for (auto& m : *arr)
     {
-        if (! m.isObject())
+        if (! isJsonObject(m))
             throw ArgError("argument " + quoted(key) + " must be an array of {control, node} objects");
-        Mapping mm { str(m, "control"), optStr(m, "action").value_or("toggleBypass"), str(m, "node") };
+        Mapping mm { nonEmpty(m, "control"), optStr(m, "action").value_or("toggleBypass"), nonEmpty(m, "node") };
         if (mm.action != "toggleBypass")
             throw ArgError("unsupported mapping action: " + mm.action);
         out.push_back(std::move(mm));
@@ -170,11 +182,11 @@ const std::map<juce::String, Handler>& commands()
     static const std::map<juce::String, Handler> table {
         { "getState", [](Engine& e, const juce::var&) { return e.getState(); } },
         { "listRigs", [](Engine& e, const juce::var&) { return e.listRigs(); } },
-        { "loadRig", [](Engine& e, const juce::var& a) { return e.loadRig(str(a, "id")); } },
+        { "loadRig", [](Engine& e, const juce::var& a) { return e.loadRig(nonEmpty(a, "id")); } },
         { "newRig", [](Engine& e, const juce::var& a)
           { return e.newRig(optStr(a, "name").value_or("New Rig"), optStr(a, "band").value_or("My Tones")); } },
         { "saveRig", [](Engine& e, const juce::var&) { return e.saveRig(); } },
-        { "deleteRig", [](Engine& e, const juce::var& a) { return e.deleteRig(str(a, "id")); } },
+        { "deleteRig", [](Engine& e, const juce::var& a) { return e.deleteRig(nonEmpty(a, "id")); } },
         { "nextRig", [](Engine& e, const juce::var&) { return e.stepRig(+1); } },
         { "prevRig", [](Engine& e, const juce::var&) { return e.stepRig(-1); } },
         { "addNode", [](Engine& e, const juce::var& a)
@@ -184,29 +196,29 @@ const std::map<juce::String, Handler>& commands()
               if (! type)
                   throw ArgError("unknown node type: " + typeName);
               const auto plugin = a["plugin"];
-              if (! plugin.isVoid() && ! plugin.isObject() && ! plugin.isString())
+              if (! plugin.isVoid() && ! isJsonObject(plugin) && ! plugin.isString())
                   throw ArgError("argument \"plugin\" must be a plugin object or uid string");
               return e.addNode(*type, integer(a, "index"), plugin, optStr(a, "asset").value_or(""));
           } },
-        { "moveNode", [](Engine& e, const juce::var& a) { return e.moveNode(str(a, "id"), integer(a, "index")); } },
-        { "removeNode", [](Engine& e, const juce::var& a) { return e.removeNode(str(a, "id")); } },
+        { "moveNode", [](Engine& e, const juce::var& a) { return e.moveNode(nonEmpty(a, "id"), integer(a, "index")); } },
+        { "removeNode", [](Engine& e, const juce::var& a) { return e.removeNode(nonEmpty(a, "id")); } },
         { "setParam", [](Engine& e, const juce::var& a)
-          { return e.setParam(str(a, "id"), str(a, "name"), static_cast<float>(number(a, "value"))); } },
-        { "toggleBypass", [](Engine& e, const juce::var& a) { return e.toggleBypass(str(a, "id")); } },
-        { "setAsset", [](Engine& e, const juce::var& a) { return e.setAsset(str(a, "id"), str(a, "file")); } },
-        { "learnMapping", [](Engine& e, const juce::var& a) { return e.learnMapping(str(a, "id")); } },
+          { return e.setParam(nonEmpty(a, "id"), nonEmpty(a, "name"), static_cast<float>(number(a, "value"))); } },
+        { "toggleBypass", [](Engine& e, const juce::var& a) { return e.toggleBypass(nonEmpty(a, "id")); } },
+        { "setAsset", [](Engine& e, const juce::var& a) { return e.setAsset(nonEmpty(a, "id"), str(a, "file")); } },
+        { "learnMapping", [](Engine& e, const juce::var& a) { return e.learnMapping(nonEmpty(a, "id")); } },
         { "cancelLearn", [](Engine& e, const juce::var&) { return e.cancelLearn(); } },
         { "listAssets", [](Engine& e, const juce::var& a) { return e.listAssets(str(a, "kind")); } },
         { "listPlugins", [](Engine& e, const juce::var&) { return e.listPlugins(); } },
         { "rescanPlugins", [](Engine& e, const juce::var&) { return e.rescanPlugins(); } },
-        { "openPluginEditor", [](Engine& e, const juce::var& a) { return e.openPluginEditor(str(a, "id")); } },
+        { "openPluginEditor", [](Engine& e, const juce::var& a) { return e.openPluginEditor(nonEmpty(a, "id")); } },
         { "getSettings", [](Engine& e, const juce::var&) { return e.getSettings(); } },
         { "setSettings", [](Engine& e, const juce::var& a) { return e.setSettings(settingsPatch(a)); } },
         { "setTuner", [](Engine& e, const juce::var& a) { return e.setTuner(boolean(a, "on")); } },
-        { "toggleFavorite", [](Engine& e, const juce::var& a) { return e.toggleFavorite(str(a, "id")); } },
-        { "restoreBackup", [](Engine& e, const juce::var& a) { return e.restoreBackup(str(a, "id")); } },
+        { "toggleFavorite", [](Engine& e, const juce::var& a) { return e.toggleFavorite(nonEmpty(a, "id")); } },
+        { "restoreBackup", [](Engine& e, const juce::var& a) { return e.restoreBackup(nonEmpty(a, "id")); } },
         { "setNodeArt", [](Engine& e, const juce::var& a)
-          { return e.setNodeArt(str(a, "id"), optStr(a, "archetype"), optStr(a, "imageFile")); } },
+          { return e.setNodeArt(nonEmpty(a, "id"), optStr(a, "archetype"), optStr(a, "imageFile")); } },
     };
     return table;
 }
@@ -216,10 +228,10 @@ Bridge::Bridge(Engine& e) : engine(e) {}
 
 void Bridge::handle(const juce::var& message)
 {
-    const juce::var id = message.isObject() ? message["id"] : juce::var();
+    const juce::var id = isJsonObject(message) ? message["id"] : juce::var();
     try
     {
-        if (! message.isObject())
+        if (! isJsonObject(message))
             return reply(id, false, "message must be a JSON object");
 
         const auto v = message["v"];
@@ -234,7 +246,7 @@ void Bridge::handle(const juce::var& message)
         auto args = message["args"];
         if (args.isVoid())
             args = json::object();
-        else if (! args.isObject())
+        else if (! isJsonObject(args))
             return reply(id, false, "\"args\" must be an object");
 
         const auto& table = commands();
@@ -258,17 +270,33 @@ void Bridge::handle(const juce::var& message)
     }
 }
 
+void Bridge::flushPending()
+{
+    auto queued = std::move(pending);
+    pending.clear();
+    for (auto& m : queued)
+        send(m);
+}
+
 void Bridge::reply(const juce::var& id, bool ok, const juce::var& payload)
 {
     if (! send)
         return;
+    flushPending();
     send(json::object({ { "v", protocolVersion }, { "reply", id }, { "ok", ok }, { ok ? "result" : "error", payload } }));
 }
 
 void Bridge::emit(const juce::String& name, const juce::var& data)
 {
-    if (send)
-        send(json::object({ { "v", protocolVersion }, { "event", name }, { "data", data } }));
+    auto message = json::object({ { "v", protocolVersion }, { "event", name }, { "data", data } });
+    if (! send)
+    {
+        if (name == "error") // e.g. startup problems before the UI attached: delivered with the next message
+            pending.push_back(message);
+        return;
+    }
+    flushPending();
+    send(message);
 }
 
 namespace json

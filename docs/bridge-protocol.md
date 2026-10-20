@@ -15,7 +15,8 @@ Every message is one JSON object. Everything runs on the app's message thread.
 - `v` other than `1` → `ok:false`, error `unsupported protocol version <v>; this engine speaks version 1`.
 - Unknown command → `ok:false`, error `unknown command: <cmd>`.
 - Missing / wrongly typed arguments → `ok:false` with a message naming the argument (e.g.
-  `missing or invalid string argument "id"`). Malformed input never crashes the engine.
+  `missing or invalid string argument "id"`); ids and parameter names must be non-empty; `args`/objects must be
+  JSON objects (not arrays). Malformed input never crashes the engine.
 - `result` is always an object (`{}` when the command has nothing to return). Most state changes are also announced
   by events, so the UI can treat events as the single source of truth.
 - Numbers are JSON numbers; a boolean is accepted where a number is expected (`true` = 1). Integers must be whole.
@@ -51,7 +52,7 @@ watchedFolders: [path], globalMappings: [{control, action, node}], footswitchKey
 
 | Command | Args | Result | Notes / events |
 |---|---|---|---|
-| `getState` | — | `{protocol: 1, rig, report, dirty, saved, learning, settings, deviceStatus, controlStatus, tunerOn, favorites: [id], recents: [id], bands: [name]}` | Call on UI start-up; startup events are sent before the UI listens. |
+| `getState` | — | `{protocol: 1, rig, report, dirty, startupErrors: [{message, context, rigId?}], saved, learning, settings, deviceStatus, controlStatus, tunerOn, favorites: [id], recents: [id], bands: [name]}` | Call on UI start-up. `startupErrors` lists problems found while starting (`context` `loadRig` with the `rigId` of a last rig that could not be loaded — offer `restoreBackup`; `audioDevice`). |
 | `listRigs` | — | `{rigs: [{id, name, band, favorite}], bands: [name]}` | Sorted by band, then name. Corrupt files are not listed. |
 | `loadRig` | `id` | `{id}` | `rigLoaded`, `rigDirty{false}` if it was dirty. Corrupt / unreadable rig → `ok:false` with the parse error (file untouched; offer `restoreBackup`). Unsaved changes of the current rig are discarded (UI confirms using `dirty`). |
 | `newRig` | `name?` (default `"New Rig"`), `band?` (default `"My Tones"`) | `{id}` | Default chain In → Gate → NamAmp → CabIR → Out; **unsaved** until `saveRig` (`saved:false`). `rigLoaded`. |
@@ -64,17 +65,17 @@ watchedFolders: [path], globalMappings: [{control, action, node}], footswitchKey
 | `setAsset` | `id`, `file` (absolute path from `listAssets`; `""` clears) | `{}` | NamAmp (`.nam`) / CabIR (IR) nodes. File must be in the asset library. Structural. |
 | `setParam` | `id`, `name`, `value` (number) | `{value}` (value the node stored, after clamping) | Live, no rebuild. `paramChanged`, `rigDirty{true}`. Unknown parameter → `ok:false`. Plugin parameters are edited in the plugin's own editor. |
 | `toggleBypass` | `id` | `{bypass}` | Live. `bypassChanged`, `rigDirty{true}`. |
-| `learnMapping` | `id` | `{}` | Arms learn: the next control press maps to `toggleBypass(id)` in the current rig (replacing that control's mapping) → `learned`, `rigDirty{true}`. Loading another rig cancels learn. |
+| `learnMapping` | `id` | `{}` | Cancels any armed learn, then arms learn (unknown/unmappable node → `ok:false`): the next control press maps to `toggleBypass(id)` in the current rig (replacing that control's mapping) → `learned`, `rigDirty{true}`. Loading another rig cancels learn. |
 | `cancelLearn` | — | `{}` | |
 | `listAssets` | `kind` (`"nam"`\|`"ir"`) | `{assets: [Asset]}` | From `Models/`, `IRs/` and watched folders. |
 | `listPlugins` | — | `{plugins: [PluginRef]}` | From the last scan (blacklisted plugins excluded). |
 | `rescanPlugins` | — | `{plugins: [PluginRef]}` | **Blocks** the engine/UI thread for the whole scan (in-process scanning); show a busy state. Never run automatically at startup. |
 | `openPluginEditor` | `id` | `{}` | Asks the app to open the plugin's native editor window. `ok:false "not available"` if the node isn't a loaded plugin or the host app has no editor support. |
 | `getSettings` | — | Settings (+ available lists) | |
-| `setSettings` | any subset of Settings fields | Settings (+ available lists) | Device fields reopen the device (plan rebuilt at the new rate/buffer); `watchedFolders` (absolute paths) rescans assets; `globalMappings` (`action` defaults to `toggleBypass`); `footswitchKeys` (keycode `"0x04"`/`"4"` → control). Saved to `settings.json`. A device that fails to open → `ok:false` with the driver's message (other fields still applied). |
+| `setSettings` | any subset of Settings fields | Settings (+ available lists) | Device fields that actually change reopen the device (plan rebuilt at the new rate/buffer); `watchedFolders` (absolute paths) rescans assets; `globalMappings` (`action` defaults to `toggleBypass`); `footswitchKeys` (keycode `"0x04"`/`"4"` → control). Saved to `settings.json`. A device that fails to open → `ok:false` with the driver's message (other fields still applied). |
 | `setTuner` | `on` (bool) | `{on}` | On: `tuner` events at 20 Hz until switched off. |
 | `toggleFavorite` | `id` | `{id, favorite}` | |
-| `restoreBackup` | `id` | `{id}` | Copies the newest `.bak` over the rig file (an unreadable rig file is first kept as `<file>.corrupt`), then loads it → `rigLoaded`. No backup → `ok:false`. |
+| `restoreBackup` | `id` | `{id}` | Copies the newest `.bak` over the rig file (the current file is first kept as `<file>.corrupt` if unreadable, else `<file>.replaced`), then loads it. Works for rigs corrupted before this launch (found through their backups) → `rigLoaded`. No backup → `ok:false`. |
 | `setNodeArt` | `id`, `archetype?`, `imageFile?` | `{id, art: {archetype, image}}` | `archetype` is stored in the rig (`rigDirty{true}`). `imageFile` (absolute path) is copied into `Art/` and recorded in `Art/user-art.json` under `"<rigId>/<nodeId>"` — never in the rig; `""` removes the assignment. |
 
 ## Events
@@ -91,4 +92,4 @@ watchedFolders: [path], globalMappings: [{control, action, node}], footswitchKey
 | `controlStatus` | ControlStatus | On change (polled every 1 s while controls run). |
 | `controlEvent` | `{control, pressed}` | Every footswitch/MIDI edge (`footswitch:L`, `midi:<device>:cc<n>`, ...). |
 | `learned` | `{control, node}` | A learn completed. |
-| `error` | `{message, context}` | Asynchronous problems (`context`: `audioDevice`, `deviceRestart`, `swapPlan`, `settings`). Command failures are replies, not events. |
+| `error` | `{message, context}` | Asynchronous problems (`context`: `audioDevice`, `deviceRestart`, `swapPlan`, `settings`). Command failures are replies, not events. Errors raised before the UI set `send` (startup) are queued and delivered ahead of the first reply/event. |
