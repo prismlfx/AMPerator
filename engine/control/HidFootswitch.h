@@ -24,19 +24,22 @@ public:
     /** Returns releases first, then presses, each in keycode order. Unassigned keys emit nothing. */
     std::vector<ControlEvent> feed(const std::set<uint8_t>& keysDownInReport);
     void assign(uint8_t keycode, const juce::String& control); // e.g. 0x05 -> "footswitch:L"
-    void clearAssignments();
+    /** Drops every assignment. Held assigned keys are released under the old map (returned); they stay held, so they
+        produce nothing more until physically released and pressed again. */
+    std::vector<ControlEvent> clearAssignments();
     /** The most recent unassigned key that went down, for setup learning. */
     std::optional<uint8_t> lastUnassignedKey() const;
 
 private:
     std::map<uint8_t, juce::String> assigned;
     std::set<uint8_t> held;
+    std::set<uint8_t> suppressed; // held across a reassignment: ignored until released
     std::optional<uint8_t> lastUnassigned;
 };
 
 /** Keys down in an input report: 8-byte boot keyboard report (byte 0 modifiers, byte 1 reserved, bytes 2..7 keycodes),
-    or the same prefixed by a small report ID (9 bytes). Modifiers are ignored. nullopt = not a usable report
-    (too short, or the "phantom" rollover-error state). */
+    or the same prefixed by report ID 1 (9 bytes). Modifiers are ignored. nullopt = not a usable report
+    (any other length or report ID, or the "phantom" rollover-error state). */
 std::optional<std::set<uint8_t>> parseKeyboardReport(const uint8_t* data, size_t length);
 
 /** True only for the keyboard collection (usage page 0x01, usage 0x06) of a device on the known list or whose product
@@ -45,13 +48,25 @@ std::optional<std::set<uint8_t>> parseKeyboardReport(const uint8_t* data, size_t
 bool isEligibleFootswitch(uint16_t vendorId, uint16_t productId, uint16_t usagePage, uint16_t usage,
                           const juce::String& product);
 
-/** Reads a USB footswitch (a HID keyboard) directly via hidapi, opened exclusively on macOS so presses don't type into
-    other apps and keep working in the background. Reading happens on a background thread; it rescans every 2 s while no
-    device is open (hot-plug). Events arrive on the message thread. */
+/** Reads a USB footswitch (a HID keyboard) directly via hidapi, so presses keep working while the app is in the
+    background. Reading happens on a background thread; it rescans every 2 s while no device is open (hot-plug).
+    Events arrive on the message thread.
+
+    Open strategy (macOS): try an exclusive (seizing) open first, so presses don't type into other apps. If that fails,
+    Input Monitoring access (IOHIDCheckAccess) decides: denied -> PermissionDenied; not yet decided -> the system prompt
+    is requested and the status is PermissionDenied until a later rescan succeeds. With access granted the same device is
+    opened shared instead (exclusive() == false). In shared mode every press ALSO types into the front app; pedals
+    reprogrammed to F13/F14/F15 (in the default key map) avoid visible typing. */
 class HidFootswitch : public ControlSource, private juce::Thread
 {
 public:
-    enum class Status { Connected, NotFound, PermissionDenied };
+    enum class Status
+    {
+        Connected,        // opened, exclusive or shared (see exclusive())
+        NotFound,         // no eligible device present
+        PermissionDenied, // Input Monitoring denied or not yet granted
+        Busy              // eligible device present but could not be opened at all (e.g. held by another app)
+    };
 
     HidFootswitch();
     ~HidFootswitch() override;
@@ -59,6 +74,8 @@ public:
     void start();
     void stop(); // message thread; no event is delivered after it returns
     Status status() const { return currentStatus.load(); }
+    /** True when the open device is seized (presses don't reach other apps). False when shared or not connected. */
+    bool exclusive() const { return exclusiveOpen.load(); }
 
     /** Keycode -> control ID, typically Settings::footswitchKeys. Callable at any time. */
     void setKeyAssignments(const std::map<int, juce::String>& keys);
@@ -74,6 +91,7 @@ private:
     void releaseHeldKeys();
 
     std::atomic<Status> currentStatus { Status::NotFound };
+    std::atomic<bool> exclusiveOpen { false };
     mutable std::mutex detectorLock;
     KeyEdgeDetector detector;
 };

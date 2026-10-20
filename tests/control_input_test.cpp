@@ -103,9 +103,27 @@ TEST_CASE("control_input: unassigned key is remembered for learning and emits no
 TEST_CASE("control_input: clearing assignments silences previously assigned keys")
 {
     auto d = factoryPedals();
-    d.clearAssignments();
+    CHECK(d.clearAssignments().empty()); // nothing held
     CHECK(d.feed({ 0x04 }).empty());
     CHECK(d.lastUnassignedKey() == std::optional<uint8_t>(0x04));
+}
+
+TEST_CASE("control_input: reassigning while a pedal is held releases it under the old map")
+{
+    auto d = factoryPedals();
+    REQUIRE(d.feed({ 0x04 }).size() == 1);
+    auto released = d.clearAssignments();
+    REQUIRE(released.size() == 1);
+    CHECK(released[0].control == "footswitch:L");
+    CHECK_FALSE(released[0].pressed);
+
+    d.assign(0x04, "footswitch:R");
+    CHECK(d.feed({ 0x04 }).empty()); // still the same physical hold: no phantom press
+    CHECK(d.feed({}).empty());       // its press was never reported, so neither is its release
+    auto ev = d.feed({ 0x04 });
+    REQUIRE(ev.size() == 1);
+    CHECK(ev[0].control == "footswitch:R");
+    CHECK(ev[0].pressed);
 }
 
 // --- HID report parsing ------------------------------------------------------------------------
@@ -142,6 +160,15 @@ TEST_CASE("control_input: modifier-only change produces no edges")
     auto ev = d.feed(*parseKeyboardReport(c.data(), c.size()));
     REQUIRE(ev.size() == 1);
     CHECK_FALSE(ev[0].pressed);
+}
+
+TEST_CASE("control_input: 9-byte reports need report id 1 and other lengths are ignored")
+{
+    std::vector<uint8_t> otherId { 0x02, 0x00, 0x00, 0x06, 0, 0, 0, 0, 0 };
+    CHECK_FALSE(parseKeyboardReport(otherId.data(), otherId.size()).has_value());
+    std::vector<uint8_t> ten(10, 0), sixteen(16, 0);
+    CHECK_FALSE(parseKeyboardReport(ten.data(), ten.size()).has_value());
+    CHECK_FALSE(parseKeyboardReport(sixteen.data(), sixteen.size()).has_value());
 }
 
 TEST_CASE("control_input: short and rollover reports are ignored")
@@ -217,10 +244,12 @@ TEST_CASE("control_input: midi note on -> pressed, note off -> released")
 
 // --- Settings ----------------------------------------------------------------------------------
 
-TEST_CASE("control_input: footswitch keys default to PCsensor a/b/c")
+TEST_CASE("control_input: footswitch keys default to PCsensor a/b/c and F13-F15")
 {
     Settings s;
-    CHECK(s.footswitchKeys == std::map<int, juce::String> { { 0x04, "footswitch:L" }, { 0x05, "footswitch:M" }, { 0x06, "footswitch:R" } });
+    CHECK(s.footswitchKeys == std::map<int, juce::String> {
+        { 0x04, "footswitch:L" }, { 0x05, "footswitch:M" }, { 0x06, "footswitch:R" },
+        { 0x68, "footswitch:L" }, { 0x69, "footswitch:M" }, { 0x6A, "footswitch:R" } });
 }
 
 TEST_CASE("control_input: footswitch keys round trip through settings")

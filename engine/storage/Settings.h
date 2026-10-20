@@ -22,8 +22,10 @@ struct Settings
     std::vector<Mapping> globalMappings;
     juce::String lastRigId;
     juce::StringArray recentRigIds /* max 10 */, favoriteRigIds;
-    /** HID keycode -> footswitch control ID. Default: the PCsensor factory keys a/b/c. */
-    std::map<int, juce::String> footswitchKeys { { 0x04, "footswitch:L" }, { 0x05, "footswitch:M" }, { 0x06, "footswitch:R" } };
+    /** HID keycode -> footswitch control ID. Default: the PCsensor factory keys a/b/c, plus F13/F14/F15 (pedals
+        reprogrammed to these type nothing visible when the device can only be opened shared). */
+    std::map<int, juce::String> footswitchKeys { { 0x04, "footswitch:L" }, { 0x05, "footswitch:M" }, { 0x06, "footswitch:R" },
+                                                 { 0x68, "footswitch:L" }, { 0x69, "footswitch:M" }, { 0x6A, "footswitch:R" } };
 
     /** Missing/corrupt file -> defaults. Missing keys or wrong-typed values -> that field's default. */
     static Settings load(const juce::File&);

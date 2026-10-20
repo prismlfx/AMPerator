@@ -29,12 +29,18 @@ FetchContent_Declare(hidapi
   GIT_REPOSITORY https://github.com/libusb/hidapi.git
   GIT_TAG hidapi-0.15.0
   GIT_SHALLOW TRUE)
-set(BUILD_SHARED_LIBS OFF)
+set(HIDAPI_WITH_LIBUSB OFF CACHE BOOL "" FORCE)
 set(HIDAPI_WITH_TESTS OFF CACHE BOOL "" FORCE)
 set(HIDAPI_BUILD_HIDTEST OFF CACHE BOOL "" FORCE)
 set(HIDAPI_BUILD_PP_DATA_DUMP OFF CACHE BOOL "" FORCE)
 
-FetchContent_MakeAvailable(JUCE Catch2 NeuralAmpModelerCore hidapi)
+FetchContent_MakeAvailable(JUCE Catch2 NeuralAmpModelerCore)
+# hidapi defaults to a shared library; build it static without leaking BUILD_SHARED_LIBS into the rest of the project.
+set(_amp_saved_build_shared ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF)
+FetchContent_MakeAvailable(hidapi)
+set(BUILD_SHARED_LIBS ${_amp_saved_build_shared})
+unset(_amp_saved_build_shared)
 if(TARGET hidapi_darwin AND NOT MSVC)
   target_compile_options(hidapi_darwin PRIVATE -w) # third-party: keep our build output clean
   set_target_properties(hidapi_darwin PROPERTIES XCODE_ATTRIBUTE_GCC_WARN_INHIBIT_ALL_WARNINGS YES)

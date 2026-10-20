@@ -16,8 +16,12 @@ std::vector<ControlEvent> KeyEdgeDetector::feed(const std::set<uint8_t>& keysDow
     std::vector<ControlEvent> out;
     for (auto k : held)
         if (keysDownInReport.count(k) == 0)
+        {
+            if (suppressed.erase(k) != 0) // its press belonged to an older map and was already released
+                continue;
             if (auto it = assigned.find(k); it != assigned.end())
                 out.push_back({ it->second, false });
+        }
 
     for (auto k : keysDownInReport)
         if (held.count(k) == 0)
@@ -34,7 +38,16 @@ std::vector<ControlEvent> KeyEdgeDetector::feed(const std::set<uint8_t>& keysDow
 
 void KeyEdgeDetector::assign(uint8_t keycode, const juce::String& control) { assigned[keycode] = control; }
 
-void KeyEdgeDetector::clearAssignments() { assigned.clear(); }
+std::vector<ControlEvent> KeyEdgeDetector::clearAssignments()
+{
+    std::vector<ControlEvent> released;
+    for (auto k : held)
+        if (auto it = assigned.find(k); it != assigned.end())
+            released.push_back({ it->second, false });
+    assigned.clear();
+    suppressed.insert(held.begin(), held.end());
+    return released;
+}
 
 std::optional<uint8_t> KeyEdgeDetector::lastUnassignedKey() const { return lastUnassigned; }
 
@@ -43,12 +56,14 @@ std::optional<uint8_t> KeyEdgeDetector::lastUnassignedKey() const { return lastU
 std::optional<std::set<uint8_t>> parseKeyboardReport(const uint8_t* data, size_t length)
 {
     constexpr size_t bootLength = 8;
-    if (data == nullptr || length < bootLength)
+    if (data == nullptr)
         return std::nullopt;
 
-    // Some PCsensor units prefix the boot report with a report ID (hidapi passes it through).
-    if (length == bootLength + 1 && data[0] >= 1 && data[0] <= 0x0f)
+    // Some PCsensor units prefix the boot report with report ID 1 (hidapi passes it through).
+    if (length == bootLength + 1 && data[0] == 0x01)
         ++data;
+    else if (length != bootLength)
+        return std::nullopt;
 
     std::set<uint8_t> keys;
     bool rollover = true;
@@ -87,18 +102,53 @@ namespace
 constexpr int rescanIntervalMs = 2000;
 constexpr int readTimeoutMs = 100;
 
-bool isPermissionError(const juce::String& error)
+/** A hint only: IOHIDCheckAccess is the primary signal. kIOReturnNotPermitted = 0xE00002E2. */
+bool looksLikePermissionError()
 {
-    // IOHIDDeviceOpen -> kIOReturnNotPermitted (0xE00002E2) when Input Monitoring is denied.
-    return error.containsIgnoreCase("E00002E2") || error.containsIgnoreCase("not permitted");
+    auto* err = hid_error(nullptr);
+    if (err == nullptr)
+        return false;
+    juce::String e(err);
+    return e.containsIgnoreCase("E00002E2") || e.containsIgnoreCase("not permitted");
 }
 
-bool inputMonitoringDenied()
+hid_device* openPath(const char* path, bool exclusive)
 {
 #if defined(__APPLE__)
-    return IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeDenied;
+    hid_darwin_set_open_exclusive(exclusive ? 1 : 0); // global hidapi option, only touched on this thread
 #else
+    juce::ignoreUnused(exclusive);
+#endif
+    return hid_open_path(path);
+}
+
+bool isOpenExclusive(hid_device* device)
+{
+#if defined(__APPLE__)
+    return hid_darwin_is_device_open_exclusive(device) == 1;
+#else
+    juce::ignoreUnused(device);
     return false;
+#endif
+}
+
+enum class Access { Granted, Denied, Undecided };
+
+#if defined(__APPLE__)
+constexpr bool hasAccessApi = true;
+#else
+constexpr bool hasAccessApi = false;
+#endif
+
+Access inputMonitoringAccess()
+{
+#if defined(__APPLE__)
+    auto access = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent);
+    if (access == kIOHIDAccessTypeGranted)
+        return Access::Granted;
+    return access == kIOHIDAccessTypeDenied ? Access::Denied : Access::Undecided;
+#else
+    return Access::Granted;
 #endif
 }
 
@@ -130,6 +180,7 @@ void HidFootswitch::stop()
 {
     stopThread(4 * readTimeoutMs + rescanIntervalMs);
     currentStatus = Status::NotFound;
+    exclusiveOpen = false;
     {
         std::lock_guard lock(detectorLock);
         detector.feed({}); // forget held keys without emitting
@@ -139,11 +190,16 @@ void HidFootswitch::stop()
 
 void HidFootswitch::setKeyAssignments(const std::map<int, juce::String>& keys)
 {
-    std::lock_guard lock(detectorLock);
-    detector.clearAssignments();
-    for (auto& [code, control] : keys)
-        if (code >= 0 && code <= 0xff)
-            detector.assign(static_cast<uint8_t>(code), control);
+    std::vector<ControlEvent> released;
+    {
+        std::lock_guard lock(detectorLock);
+        released = detector.clearAssignments(); // held pedals are released under the old map first
+        for (auto& [code, control] : keys)
+            if (code >= 0 && code <= 0xff)
+                detector.assign(static_cast<uint8_t>(code), control);
+    }
+    for (auto& e : released)
+        post(e);
 }
 
 std::optional<uint8_t> HidFootswitch::lastUnassignedKey() const
@@ -154,12 +210,8 @@ std::optional<uint8_t> HidFootswitch::lastUnassignedKey() const
 
 hid_device* HidFootswitch::tryOpen()
 {
-    bool eligibleSeen = false, permissionError = false;
+    bool eligibleSeen = false, permissionHint = false;
     hid_device* opened = nullptr;
-
-#if defined(__APPLE__)
-    hid_darwin_set_open_exclusive(1); // seize: presses no longer reach other apps
-#endif
 
     auto* list = hid_enumerate(0, 0);
     for (auto* d = list; d != nullptr && opened == nullptr; d = d->next)
@@ -167,32 +219,44 @@ hid_device* HidFootswitch::tryOpen()
         juce::String product = d->product_string != nullptr ? juce::String(d->product_string) : juce::String();
         if (!isEligibleFootswitch(d->vendor_id, d->product_id, d->usage_page, d->usage, product))
             continue;
-
         eligibleSeen = true;
-        opened = hid_open_path(d->path);
-        if (opened == nullptr)
+
+        if ((opened = openPath(d->path, true)) != nullptr) // seize: presses no longer reach other apps
+            break;
+        permissionHint = permissionHint || looksLikePermissionError();
+
+        auto access = inputMonitoringAccess();
+        if (access != Access::Granted)
         {
-            auto* err = hid_error(nullptr);
-            permissionError = permissionError || (err != nullptr && isPermissionError(juce::String(err)));
+            if (access == Access::Undecided)
+                requestInputMonitoringOnce();
+            hid_free_enumeration(list);
+            currentStatus = Status::PermissionDenied;
+            return nullptr;
         }
+
+        // Access is granted, yet seizing failed (not privileged, or another app holds it): share instead.
+        if ((opened = openPath(d->path, false)) == nullptr)
+            permissionHint = permissionHint || looksLikePermissionError();
     }
     hid_free_enumeration(list);
+#if defined(__APPLE__)
+    hid_darwin_set_open_exclusive(1); // restore hidapi's default
+#endif
 
     if (opened != nullptr)
     {
+        exclusiveOpen = isOpenExclusive(opened);
         currentStatus = Status::Connected;
         return opened;
     }
 
-    if (eligibleSeen && (permissionError || inputMonitoringDenied()))
-    {
-        currentStatus = Status::PermissionDenied;
-        requestInputMonitoringOnce();
-    }
-    else
-    {
-        currentStatus = Status::NotFound;
-    }
+    // On macOS IOHIDCheckAccess already said "granted" by now, so a failure is Busy; the error text is only a
+    // hint where no access API exists.
+    exclusiveOpen = false;
+    currentStatus = !eligibleSeen ? Status::NotFound
+                  : (permissionHint && !hasAccessApi) ? Status::PermissionDenied
+                                                       : Status::Busy;
     return nullptr;
 }
 
@@ -245,6 +309,7 @@ void HidFootswitch::run()
         {
             hid_close(device);
             device = nullptr;
+            exclusiveOpen = false;
             currentStatus = Status::NotFound;
             releaseHeldKeys();
             continue;
