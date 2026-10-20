@@ -170,9 +170,76 @@ TEST_CASE("audio_io: a failed reconnect stays Disconnected")
     f.hotPlug();
     CHECK(f.io->status() == DeviceStatus::Disconnected);
     CHECK(seen == std::vector<DeviceStatus> { DeviceStatus::Disconnected }); // no NoDevice flicker
+    CHECK(f.io->retryScheduled());
     f.type->failOpen = false;
-    f.hotPlug();
+    f.hotPlug(); // the same device list: not retried by a notification...
+    CHECK(f.io->status() == DeviceStatus::Disconnected);
+    f.io->retryNow(); // ...but by the next retry-timer tick
     CHECK(f.io->status() == DeviceStatus::Running);
+    CHECK(f.currentName() == "Fake Solo");
+    CHECK_FALSE(f.io->retryScheduled());
+}
+
+TEST_CASE("audio_io: a busy device that comes back is tried once per device-list change and once per retry tick")
+{
+    Fixture f;
+    REQUIRE(f.io->apply(Fixture::solo()).wasOk());
+    f.type->removeDevice("Fake Solo");
+    f.hotPlug();
+    REQUIRE(f.io->status() == DeviceStatus::Disconnected);
+
+    f.type->addDevice("Fake Solo");
+    f.type->refuseOpen.add("Fake Solo");
+    f.type->openCalls.clear();
+    f.hotPlug();
+    for (int i = 0; i < 5; ++i) // our own failed opens post change notifications too: none of them retries
+        f.manager.sendSynchronousChangeMessage();
+    CHECK(f.type->openCalls.size() == 1);
+    CHECK(f.io->status() == DeviceStatus::Disconnected);
+    CHECK(f.io->retryScheduled());
+
+    for (int tick = 0; tick < 3; ++tick)
+    {
+        f.io->retryNow();
+        f.manager.sendSynchronousChangeMessage();
+    }
+    CHECK(f.type->openCalls.size() == 4); // one per tick
+    CHECK(f.io->status() == DeviceStatus::Disconnected);
+
+    f.type->refuseOpen.clear();
+    f.io->retryNow();
+    CHECK(f.io->status() == DeviceStatus::Running);
+    CHECK(f.currentName() == "Fake Solo");
+    CHECK_FALSE(f.io->retryScheduled());
+}
+
+TEST_CASE("audio_io: the retry timer moves from a fallback to the preferred device once it can be opened")
+{
+    Fixture f;
+    f.type->removeDevice("Fake Solo");
+    REQUIRE(f.io->apply(Fixture::solo()).wasOk());
+    CHECK_FALSE(f.io->retryScheduled()); // the preferred device is not listed: a list change will bring it
+    f.type->addDevice("Fake Solo");
+    f.type->refuseOpen.add("Fake Solo");
+    f.hotPlug();
+    REQUIRE(f.currentName() == "Fake Other");
+    CHECK(f.io->retryScheduled());
+
+    f.type->openCalls.clear();
+    f.io->retryNow(); // still busy: one attempt, and the fallback comes straight back
+    f.manager.sendSynchronousChangeMessage();
+    int soloAttempts = 0;
+    for (auto& n : f.type->openCalls)
+        soloAttempts += n == "Fake Solo" ? 1 : 0;
+    CHECK(soloAttempts == 1);
+    CHECK(f.currentName() == "Fake Other");
+    CHECK(f.io->status() == DeviceStatus::Running);
+
+    f.type->refuseOpen.clear();
+    f.io->retryNow();
+    CHECK(f.currentName() == "Fake Solo");
+    CHECK(f.io->usingPreferred());
+    CHECK_FALSE(f.io->retryScheduled());
 }
 
 TEST_CASE("audio_io: a stopped device is reopened once the change notification arrives")

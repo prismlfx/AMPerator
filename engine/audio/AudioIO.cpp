@@ -50,11 +50,13 @@ AudioIO::AudioIO(juce::AudioDeviceManager& m, RealtimeEngine& e) : manager(m), e
     manager.addAudioCallback(&engine);
     manager.addAudioCallback(watcher.get());
     manager.addChangeListener(this);
+    retryTimer.tick = [this] { retryNow(); };
 }
 
 AudioIO::~AudioIO()
 {
     *alive = false;
+    retryTimer.stopTimer();
     manager.removeChangeListener(this);
     manager.removeAudioCallback(watcher.get());
     manager.removeAudioCallback(&engine);
@@ -128,6 +130,7 @@ juce::Result AudioIO::apply(const Settings& s)
     auto result = applyInternal(s, false);
     if (result.failed() && s.audioDeviceName.isNotEmpty() && isListed(s.audioDeviceName))
         preferredFailedList = deviceListSnapshot();
+    updateRetryTimer();
     return result;
 }
 
@@ -239,6 +242,7 @@ juce::Result AudioIO::applyInternal(const Settings& s, bool reconnecting)
     }
 
     setWanted(true, name);
+    wantedFailedList.reset();
     onFallback = usedFallback && preferred.audioDeviceName.isNotEmpty();
     wanted = s;
     wanted.audioDeviceType = type->getTypeName();
@@ -347,7 +351,32 @@ void AudioIO::changeListenerCallback(juce::ChangeBroadcaster*)
 {
     if (applying)
         return;
+    reconcile(false);
+    updateRetryTimer();
+}
 
+void AudioIO::retryNow()
+{
+    if (applying)
+        return;
+    reconcile(true);
+    updateRetryTimer();
+}
+
+void AudioIO::updateRetryTimer()
+{
+    const bool preferredPending = preferredFailedList.has_value() && ! usingPreferred()
+                               && isListed(preferred.audioDeviceName);
+    const bool wantedPending = wantedFailedList.has_value() && hasWanted && currentStatus == DeviceStatus::Disconnected
+                            && isListed(wanted.audioDeviceName);
+    if (! preferredPending && ! wantedPending)
+        retryTimer.stopTimer();
+    else if (! retryTimer.isTimerRunning())
+        retryTimer.startTimer(retryIntervalMs);
+}
+
+void AudioIO::reconcile(bool force)
+{
     // A fallback is running (or nothing could be opened): switch to the preferred device once it is listed again.
     // If it is listed but will not open, wait for the device list to change before trying again: our own attempt
     // (and the fallback reopen) post change notifications that must not retry it.
@@ -358,7 +387,7 @@ void AudioIO::changeListenerCallback(juce::ChangeBroadcaster*)
         if (current == nullptr || current->getName() != preferred.audioDeviceName || ! deviceRunning())
         {
             auto list = deviceListSnapshot();
-            if (! preferredFailedList.has_value() || *preferredFailedList != list)
+            if (force || ! preferredFailedList.has_value() || *preferredFailedList != list)
             {
                 if (applyInternal(Settings(preferred), true).wasOk())
                 {
@@ -398,6 +427,7 @@ void AudioIO::changeListenerCallback(juce::ChangeBroadcaster*)
         // Someone switched devices outside apply(): adopt what is running instead of fighting it.
         writeBack(wanted);
         preferred = wanted;
+        preferredFailedList.reset();
         onFallback = false;
         setWanted(true, wanted.audioDeviceName);
         wantedInput = wanted.inputChannel;
@@ -414,7 +444,14 @@ void AudioIO::changeListenerCallback(juce::ChangeBroadcaster*)
         manager.closeAudioDevice();
     setStatus(DeviceStatus::Disconnected);
 
+    // Back again: same settings. If it is listed but will not open, retry only when the device list changes (or on a
+    // retry-timer tick): our own failed attempt posts a change notification that must not retry it.
     if (wantedListed)
-        applyInternal(Settings(wanted), true); // back again: same settings
+    {
+        auto list = deviceListSnapshot();
+        if (force || ! wantedFailedList.has_value() || *wantedFailedList != list)
+            if (applyInternal(Settings(wanted), true).failed())
+                wantedFailedList = std::move(list);
+    }
 }
 } // namespace amp

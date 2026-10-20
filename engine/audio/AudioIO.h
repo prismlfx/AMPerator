@@ -66,6 +66,12 @@ public:
     // prepared for a different sample rate. (Without a MessageManager -- headless tests -- it fires inline.)
     std::function<void(double sampleRate, int bufferSize)> onDeviceRestarted;
 
+    // While the preferred device (on a fallback / with nothing open) or the wanted device (Disconnected) is listed
+    // but will not open, a message-thread timer retries it every retryIntervalMs; it stops once that is resolved.
+    static constexpr int retryIntervalMs = 5000;
+    void retryNow();             // message thread: what one retry-timer tick does (also used by tests)
+    bool retryScheduled() const { return retryTimer.isTimerRunning(); }
+
     juce::StringArray availableDevices() const;  // of the current device type
     juce::Array<double> sampleRates() const;      // of the open device; empty without one
     juce::Array<int> bufferSizes() const;
@@ -76,6 +82,8 @@ private:
     struct StartWatcher;
 
     void changeListenerCallback(juce::ChangeBroadcaster*) override;
+    void reconcile(bool force); // force: retry a listed-but-unopenable device even though the list is unchanged
+    void updateRetryTimer();
     bool deviceRunning() const;
     bool isListed(const juce::String& deviceName) const; // by any device type
     juce::StringArray deviceListSnapshot() const;          // every device name of every type, in order
@@ -101,6 +109,13 @@ private:
     bool onFallback = false; // the open (or lost) device is a fallback for `preferred`
     // The device list when `preferred` last failed to open while listed; it is not retried until the list differs.
     std::optional<juce::StringArray> preferredFailedList;
+    // The device list when the wanted device last failed to reopen while listed (same rule, reconnect path).
+    std::optional<juce::StringArray> wantedFailedList;
+    struct RetryTimer : juce::Timer
+    {
+        std::function<void()> tick;
+        void timerCallback() override { tick(); }
+    } retryTimer;
     int wantedInput = 0, wantedOutputFirst = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioIO)
