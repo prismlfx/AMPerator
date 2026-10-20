@@ -66,8 +66,9 @@ public:
     // prepared for a different sample rate. (Without a MessageManager -- headless tests -- it fires inline.)
     std::function<void(double sampleRate, int bufferSize)> onDeviceRestarted;
 
-    // While the preferred device (on a fallback / with nothing open) or the wanted device (Disconnected) is listed
-    // but will not open, a message-thread timer retries it every retryIntervalMs; it stops once that is resolved.
+    // While no audio plays (nothing open, or Disconnected) and the preferred / wanted device is listed but will not
+    // open, a message-thread timer retries it every retryIntervalMs; it stops once that is resolved. A running fallback
+    // is never interrupted by it: the preferred device is then retried only on a device-list change or apply().
     static constexpr int retryIntervalMs = 5000;
     void retryNow();             // message thread: what one retry-timer tick does (also used by tests)
     bool retryScheduled() const { return retryTimer.isTimerRunning(); }

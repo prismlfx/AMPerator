@@ -365,7 +365,9 @@ void AudioIO::retryNow()
 
 void AudioIO::updateRetryTimer()
 {
-    const bool preferredPending = preferredFailedList.has_value() && ! usingPreferred()
+    // Only while no audio plays anyway: a retry from a running fallback would close it (a dropout every tick).
+    const bool silent = ! hasWanted || currentStatus != DeviceStatus::Running;
+    const bool preferredPending = silent && preferredFailedList.has_value() && ! usingPreferred()
                                && isListed(preferred.audioDeviceName);
     const bool wantedPending = wantedFailedList.has_value() && hasWanted && currentStatus == DeviceStatus::Disconnected
                             && isListed(wanted.audioDeviceName);
@@ -387,7 +389,9 @@ void AudioIO::reconcile(bool force)
         if (current == nullptr || current->getName() != preferred.audioDeviceName || ! deviceRunning())
         {
             auto list = deviceListSnapshot();
-            if (force || ! preferredFailedList.has_value() || *preferredFailedList != list)
+            // A forced (timer) retry never interrupts a running fallback: that waits for a list change / apply().
+            const bool forced = force && ! deviceRunning();
+            if (forced || ! preferredFailedList.has_value() || *preferredFailedList != list)
             {
                 if (applyInternal(Settings(preferred), true).wasOk())
                 {

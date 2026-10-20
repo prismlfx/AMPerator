@@ -213,32 +213,49 @@ TEST_CASE("audio_io: a busy device that comes back is tried once per device-list
     CHECK_FALSE(f.io->retryScheduled());
 }
 
-TEST_CASE("audio_io: the retry timer moves from a fallback to the preferred device once it can be opened")
+TEST_CASE("audio_io: the retry timer never interrupts a running fallback")
 {
     Fixture f;
     f.type->removeDevice("Fake Solo");
     REQUIRE(f.io->apply(Fixture::solo()).wasOk());
-    CHECK_FALSE(f.io->retryScheduled()); // the preferred device is not listed: a list change will bring it
     f.type->addDevice("Fake Solo");
     f.type->refuseOpen.add("Fake Solo");
     f.hotPlug();
     REQUIRE(f.currentName() == "Fake Other");
-    CHECK(f.io->retryScheduled());
+    CHECK_FALSE(f.io->retryScheduled()); // audio is playing through the fallback: no timed retries
 
     f.type->openCalls.clear();
-    f.io->retryNow(); // still busy: one attempt, and the fallback comes straight back
-    f.manager.sendSynchronousChangeMessage();
-    int soloAttempts = 0;
-    for (auto& n : f.type->openCalls)
-        soloAttempts += n == "Fake Solo" ? 1 : 0;
-    CHECK(soloAttempts == 1);
+    f.type->closeCalls.clear();
+    f.type->refuseOpen.clear();
+    for (int tick = 0; tick < 3; ++tick) // even if a tick arrived, it must leave the fallback alone
+        f.io->retryNow();
+    CHECK(f.type->openCalls.isEmpty());
+    CHECK(f.type->closeCalls.isEmpty());
     CHECK(f.currentName() == "Fake Other");
     CHECK(f.io->status() == DeviceStatus::Running);
+
+    f.type->addDevice("Fake Third"); // a list change does retry it
+    f.hotPlug();
+    CHECK(f.currentName() == "Fake Solo");
+    CHECK(f.io->usingPreferred());
+}
+
+TEST_CASE("audio_io: with nothing open the retry timer opens a preferred device once it is free")
+{
+    Fixture f;
+    f.type->refuseOpen.add("Fake Solo");
+    REQUIRE(f.io->apply(Fixture::solo()).failed());
+    CHECK(f.io->retryScheduled());
+    f.type->openCalls.clear();
+    f.io->retryNow(); // still busy: one attempt per tick
+    f.manager.sendSynchronousChangeMessage();
+    CHECK(f.type->openCalls.size() == 1);
+    CHECK(f.io->status() == DeviceStatus::NoDevice);
 
     f.type->refuseOpen.clear();
     f.io->retryNow();
     CHECK(f.currentName() == "Fake Solo");
-    CHECK(f.io->usingPreferred());
+    CHECK(f.io->status() == DeviceStatus::Running);
     CHECK_FALSE(f.io->retryScheduled());
 }
 
