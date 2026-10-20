@@ -70,13 +70,16 @@ PluginNode::PluginNode(std::unique_ptr<juce::AudioPluginInstance> p, juce::File 
     : plugin(std::move(p)), crashMarker(std::move(marker)), pluginId(std::move(id))
 {
     negotiateLayout(*plugin);
-    stereo = plugin->getTotalNumOutputChannels() >= 2;
+    stereo = plugin->getChannelCountOfBus(false, 0) >= 2; // main output bus
 }
 
 PluginNode::~PluginNode()
 {
+    // Teardown calls into the plugin too: a crash here must blacklist it like a crash on load.
+    const ScopedCrashMarker guard(crashMarker, pluginId);
     if (prepared)
         plugin->releaseResources();
+    plugin.reset();
 }
 
 void PluginNode::prepare(const ProcessSpec& spec)
@@ -91,6 +94,8 @@ void PluginNode::prepare(const ProcessSpec& spec)
     plugin->setRateAndBufferSizeDetails(spec.sampleRate, spec.maxBlock);
     if (everPrepared)
     {
+        if (prepared)
+            plugin->releaseResources();
         plugin->prepareToPlay(spec.sampleRate, spec.maxBlock);
     }
     else

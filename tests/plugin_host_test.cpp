@@ -28,33 +28,23 @@ public:
     std::atomic<float> value { 0.5f };
 };
 
-class FakeGain final : public juce::AudioPluginInstance
+// Set by tests that check the crash marker guards plugin teardown; FakeBase records whether the marker
+// file existed while releaseResources() and the destructor ran.
+juce::File gCrashMarker;
+bool gMarkerDuringRelease = false;
+bool gMarkerDuringDestruction = false;
+
+// Boilerplate shared by the fake plugins.
+class FakeBase : public juce::AudioPluginInstance
 {
 public:
-    explicit FakeGain(juce::PluginDescription d)
-        : AudioPluginInstance(BusesProperties()
-                                  .withInput("In", juce::AudioChannelSet::stereo())
-                                  .withOutput("Out", juce::AudioChannelSet::stereo())),
-          desc(std::move(d))
-    {
-        auto p = std::make_unique<FakeGainParam>();
-        gain = p.get();
-        addHostedParameter(std::move(p));
-    }
+    FakeBase(const BusesProperties& buses, juce::PluginDescription d) : AudioPluginInstance(buses), desc(std::move(d)) {}
+    ~FakeBase() override { gMarkerDuringDestruction = gCrashMarker != juce::File() && gCrashMarker.exists(); }
 
     void fillInPluginDescription(juce::PluginDescription& d) const override { d = desc; }
     const juce::String getName() const override { return desc.name; }
     void prepareToPlay(double, int) override {}
-    void releaseResources() override {}
-    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
-    {
-        buffer.applyGain(2.0f * gain->getValue());
-    }
-    bool isBusesLayoutSupported(const BusesLayout& l) const override
-    {
-        return l.getMainInputChannelSet() == juce::AudioChannelSet::stereo()
-               && l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
-    }
+    void releaseResources() override { gMarkerDuringRelease = gCrashMarker != juce::File() && gCrashMarker.exists(); }
     double getTailLengthSeconds() const override { return 0.0; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
@@ -65,6 +55,36 @@ public:
     void setCurrentProgram(int) override {}
     const juce::String getProgramName(int) override { return {}; }
     void changeProgramName(int, const juce::String&) override {}
+    void getStateInformation(juce::MemoryBlock&) override {}
+    void setStateInformation(const void*, int) override {}
+
+private:
+    juce::PluginDescription desc;
+};
+
+class FakeGain final : public FakeBase
+{
+public:
+    explicit FakeGain(juce::PluginDescription d)
+        : FakeBase(BusesProperties()
+                       .withInput("In", juce::AudioChannelSet::stereo())
+                       .withOutput("Out", juce::AudioChannelSet::stereo()),
+                   std::move(d))
+    {
+        auto p = std::make_unique<FakeGainParam>();
+        gain = p.get();
+        addHostedParameter(std::move(p));
+    }
+
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+    {
+        buffer.applyGain(2.0f * gain->getValue());
+    }
+    bool isBusesLayoutSupported(const BusesLayout& l) const override
+    {
+        return l.getMainInputChannelSet() == juce::AudioChannelSet::stereo()
+               && l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+    }
     void getStateInformation(juce::MemoryBlock& dest) override
     {
         const float v = gain->getValue();
@@ -81,9 +101,95 @@ public:
     }
 
     FakeGainParam* gain = nullptr;
+};
 
-private:
-    juce::PluginDescription desc;
+// Mono in/mono out only. Output = 0.5 * input.
+class FakeMono final : public FakeBase
+{
+public:
+    explicit FakeMono(juce::PluginDescription d)
+        : FakeBase(BusesProperties()
+                       .withInput("In", juce::AudioChannelSet::mono())
+                       .withOutput("Out", juce::AudioChannelSet::mono()),
+                   std::move(d)) {}
+
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+    {
+        channelsSeen = buffer.getNumChannels();
+        buffer.applyGain(0.5f);
+    }
+    bool isBusesLayoutSupported(const BusesLayout& l) const override
+    {
+        return l.getMainInputChannelSet() == juce::AudioChannelSet::mono()
+               && l.getMainOutputChannelSet() == juce::AudioChannelSet::mono();
+    }
+
+    int channelsSeen = -1;
+};
+
+// Defaults to mono/mono but also supports mono in/stereo out, which the host should negotiate.
+// Output: L = 0.5 * in, R = 0.25 * in.
+class FakeMonoToStereo final : public FakeBase
+{
+public:
+    explicit FakeMonoToStereo(juce::PluginDescription d)
+        : FakeBase(BusesProperties()
+                       .withInput("In", juce::AudioChannelSet::mono())
+                       .withOutput("Out", juce::AudioChannelSet::mono()),
+                   std::move(d)) {}
+
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+    {
+        channelsSeen = buffer.getNumChannels();
+        if (buffer.getNumChannels() < 2)
+            return;
+        buffer.copyFrom(1, 0, buffer, 0, 0, buffer.getNumSamples());
+        buffer.applyGain(0, 0, buffer.getNumSamples(), 0.5f);
+        buffer.applyGain(1, 0, buffer.getNumSamples(), 0.25f);
+    }
+    bool isBusesLayoutSupported(const BusesLayout& l) const override
+    {
+        return l.getMainInputChannelSet() == juce::AudioChannelSet::mono()
+               && (l.getMainOutputChannelSet() == juce::AudioChannelSet::mono()
+                   || l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo());
+    }
+
+    int channelsSeen = -1;
+};
+
+// Stereo main in + stereo sidechain in (4 input channels), stereo out. Output = 0.5 * main input.
+// Records the sidechain's peak, then scribbles over it so the next block shows whether the host cleared it.
+class FakeSidechain final : public FakeBase
+{
+public:
+    explicit FakeSidechain(juce::PluginDescription d)
+        : FakeBase(BusesProperties()
+                       .withInput("In", juce::AudioChannelSet::stereo())
+                       .withInput("Sidechain", juce::AudioChannelSet::stereo())
+                       .withOutput("Out", juce::AudioChannelSet::stereo()),
+                   std::move(d)) {}
+
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+    {
+        channelsSeen = buffer.getNumChannels();
+        if (buffer.getNumChannels() < 4)
+            return;
+        const int n = buffer.getNumSamples();
+        sidechainPeak = juce::jmax(buffer.getMagnitude(2, 0, n), buffer.getMagnitude(3, 0, n));
+        for (int ch = 2; ch < 4; ++ch)
+            juce::FloatVectorOperations::fill(buffer.getWritePointer(ch), 9.0f, n);
+        buffer.applyGain(0, 0, n, 0.5f);
+        buffer.applyGain(1, 0, n, 0.5f);
+    }
+    bool isBusesLayoutSupported(const BusesLayout& l) const override
+    {
+        return l.inputBuses.size() == 2 && l.getMainInputChannelSet() == juce::AudioChannelSet::stereo()
+               && l.getChannelSet(true, 1) == juce::AudioChannelSet::stereo()
+               && l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+    }
+
+    int channelsSeen = -1;
+    float sidechainPeak = -1.0f;
 };
 
 class FakeFormat final : public juce::AudioPluginFormat
@@ -104,7 +210,7 @@ public:
     bool isTrivialToScan() const override { return true; }
     juce::StringArray searchPathsForPlugins(const juce::FileSearchPath&, bool, bool) override
     {
-        return { "fake://gain", "fake://boost" };
+        return { "fake://gain", "fake://boost", "fake://mono", "fake://monostereo", "fake://sidechain" };
     }
     juce::FileSearchPath getDefaultLocationsToSearch() override { return {}; }
     bool requiresUnblockedMessageThreadDuringCreation(const juce::PluginDescription&) const override { return false; }
@@ -112,11 +218,26 @@ public:
 protected:
     void createPluginInstance(const juce::PluginDescription& d, double, int, PluginCreationCallback cb) override
     {
-        cb(std::make_unique<FakeGain>(d), {});
+        const auto& id = d.fileOrIdentifier;
+        if (id == "fake://mono")
+            cb(std::make_unique<FakeMono>(d), {});
+        else if (id == "fake://monostereo")
+            cb(std::make_unique<FakeMonoToStereo>(d), {});
+        else if (id == "fake://sidechain")
+            cb(std::make_unique<FakeSidechain>(d), {});
+        else
+            cb(std::make_unique<FakeGain>(d), {});
     }
 
 private:
-    static juce::String nameFor(const juce::String& id) { return id == "fake://gain" ? "FakeGain" : "FakeBoost"; }
+    static juce::String nameFor(const juce::String& id)
+    {
+        if (id == "fake://gain") return "FakeGain";
+        if (id == "fake://mono") return "FakeMono";
+        if (id == "fake://monostereo") return "FakeMonoToStereo";
+        if (id == "fake://sidechain") return "FakeSidechain";
+        return "FakeBoost";
+    }
 
     static juce::PluginDescription describe(const juce::String& id)
     {
@@ -263,8 +384,18 @@ TEST_CASE("plugin_host: crash marker on startup blacklists that plugin")
     REQUIRE_FALSE(f.dir.getChildFile("crash-marker").exists());
     REQUIRE(f.dir.getChildFile("blacklist.txt").loadFileAsString().contains(uid));
 
-    host->checkCrashMarkerOnStartup(); // no marker: nothing changes, no duplicate entry
+    host->checkCrashMarkerOnStartup(); // no marker: nothing changes
     REQUIRE(host->blacklisted().size() == 1);
+
+    // The same plugin crashing again must not produce a duplicate entry.
+    REQUIRE(f.dir.getChildFile("crash-marker").replaceWithText(uid));
+    host->checkCrashMarkerOnStartup();
+    REQUIRE(host->blacklisted().size() == 1);
+    juce::StringArray lines;
+    f.dir.getChildFile("blacklist.txt").readLines(lines);
+    lines.removeEmptyStrings();
+    REQUIRE(lines.size() == 1);
+    REQUIRE(f.makeHost()->blacklisted().size() == 1);
 }
 
 TEST_CASE("plugin_host: blacklisted plugin cannot be created and is hidden from available()")
@@ -320,4 +451,89 @@ TEST_CASE("plugin_host: a plugin file that crashed the scan is skipped on the ne
     REQUIRE_FALSE(findByName(host->available(), "FakeBoost").has_value());
     REQUIRE_FALSE(f.dir.getChildFile("crash-marker").exists());
     REQUIRE_FALSE(f.dir.getChildFile("scan-in-progress").loadFileAsString().contains("fake://"));
+}
+
+namespace
+{
+// Creates the named plugin, prepares it, fills io with distinct per-channel levels (L 0.8, R 0.6) and runs
+// two blocks under the allocation guard. Returns the node; io holds the output of the second block.
+std::unique_ptr<amp::ProcessorNode> createAndRun(Fixture& f, const juce::String& name, juce::AudioBuffer<float>& io)
+{
+    auto host = f.makeHost();
+    host->scan([](float) {});
+    const auto desc = findByName(host->available(), name);
+    REQUIRE(desc.has_value());
+    juce::String error;
+    auto node = host->create(amp::PluginHost::refFor(*desc), spec, error);
+    REQUIRE(node != nullptr);
+    node->prepare(spec);
+
+    io.setSize(2, spec.maxBlock);
+    amp::RtSafety::reset();
+    for (int block = 0; block < 2; ++block)
+    {
+        juce::FloatVectorOperations::fill(io.getWritePointer(0), 0.8f, spec.maxBlock);
+        juce::FloatVectorOperations::fill(io.getWritePointer(1), 0.6f, spec.maxBlock);
+        const amp::RtSafety::ScopedNoAlloc noAlloc;
+        node->process(io, 128);
+    }
+    REQUIRE(amp::RtSafety::violations() == 0);
+    return node;
+}
+
+bool near(float a, float b) { return std::abs(a - b) < 1e-6f; }
+} // namespace
+
+TEST_CASE("plugin_host: mono-only plugin processes channel 0 and leaves channel 1 alone")
+{
+    Fixture f;
+    juce::AudioBuffer<float> io;
+    auto node = createAndRun(f, "FakeMono", io);
+    REQUIRE_FALSE(node->isStereo());
+    auto& plugin = dynamic_cast<FakeMono&>(*dynamic_cast<amp::PluginNode&>(*node).instance());
+    REQUIRE(plugin.channelsSeen == 1);
+    REQUIRE(near(io.getSample(0, 0), 0.4f));
+    REQUIRE(near(io.getSample(0, 127), 0.4f));
+    REQUIRE(near(io.getSample(1, 0), 0.6f));
+}
+
+TEST_CASE("plugin_host: mono-in stereo-out layout is negotiated and fed from channel 0")
+{
+    Fixture f;
+    juce::AudioBuffer<float> io;
+    auto node = createAndRun(f, "FakeMonoToStereo", io);
+    REQUIRE(node->isStereo());
+    auto& plugin = dynamic_cast<FakeMonoToStereo&>(*dynamic_cast<amp::PluginNode&>(*node).instance());
+    REQUIRE(plugin.channelsSeen == 2);
+    REQUIRE(near(io.getSample(0, 0), 0.4f)); // 0.5 * ch0
+    REQUIRE(near(io.getSample(1, 0), 0.2f)); // 0.25 * ch0 (ch1's 0.6 is not an input)
+}
+
+TEST_CASE("plugin_host: sidechain channels use cleared scratch, main bus maps to io")
+{
+    Fixture f;
+    juce::AudioBuffer<float> io;
+    auto node = createAndRun(f, "FakeSidechain", io);
+    REQUIRE(node->isStereo());
+    auto& plugin = dynamic_cast<FakeSidechain&>(*dynamic_cast<amp::PluginNode&>(*node).instance());
+    REQUIRE(plugin.channelsSeen == 4);
+    REQUIRE(plugin.sidechainPeak == 0.0f); // second block: the first block's scribbles were cleared
+    REQUIRE(near(io.getSample(0, 0), 0.4f));
+    REQUIRE(near(io.getSample(1, 127), 0.3f));
+}
+
+TEST_CASE("plugin_host: plugin teardown runs under the crash marker")
+{
+    Fixture f;
+    gCrashMarker = f.dir.getChildFile("crash-marker");
+    gMarkerDuringRelease = gMarkerDuringDestruction = false;
+    {
+        juce::AudioBuffer<float> io;
+        auto node = createAndRun(f, "FakeGain", io);
+        REQUIRE_FALSE(gCrashMarker.exists());
+    }
+    REQUIRE(gMarkerDuringRelease);
+    REQUIRE(gMarkerDuringDestruction);
+    REQUIRE_FALSE(gCrashMarker.exists());
+    gCrashMarker = juce::File();
 }

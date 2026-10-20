@@ -14,7 +14,8 @@ namespace amp
 // A hosted third-party plugin as a chain node. Bus layout is negotiated at construction: stereo in/out
 // if supported, else mono in/stereo out, else mono/mono (else whatever the plugin defaults to).
 // Mono-input plugins read channel 0. process() does not allocate (plugins with more than 2 channels get
-// preallocated scratch channels, cleared every block). The first prepare() is crash-marker guarded.
+// preallocated scratch channels, cleared every block). isStereo() = main output bus has >= 2 channels.
+// The first prepare() and teardown are crash-marker guarded; a repeat prepare() releases resources first.
 class PluginNode : public ProcessorNode
 {
 public:
