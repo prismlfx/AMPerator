@@ -22,6 +22,8 @@ endif()
 add_library(amp_engine STATIC
   Engine.cpp
   Engine.h
+  audio/AudioIO.cpp
+  audio/AudioIO.h
   assets/AssetIndex.cpp
   assets/AssetIndex.h
   dsp/BuiltinNodes.cpp
