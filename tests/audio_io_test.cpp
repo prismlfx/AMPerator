@@ -67,6 +67,8 @@ TEST_CASE("audio_io: applies settings to named device")
     CHECK(f.io->availableDevices().contains("Fake Other"));
     CHECK(f.io->sampleRates().contains(48000.0));
     CHECK(f.io->bufferSizes().contains(64));
+    CHECK(f.io->inputChannelNames() == juce::StringArray { "In 1" });
+    CHECK(f.io->outputChannelNames() == juce::StringArray { "Out 1", "Out 2" });
 }
 
 TEST_CASE("audio_io: unknown device falls back to default")

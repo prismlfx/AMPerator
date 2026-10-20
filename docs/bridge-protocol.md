@@ -3,6 +3,19 @@
 The web UI talks to the engine (`amp::Engine`, `engine/Engine.h`) through `amp::Bridge` (`engine/bridge/Bridge.h`).
 Every message is one JSON object. Everything runs on the app's message thread.
 
+## Transport (app ↔ web UI)
+
+The app (`app/MainWindow.cpp`) hosts the UI in a JUCE `WebBrowserComponent` and registers two native functions,
+called from `ui/src/bridge.ts` with JUCE's `__juce__invoke` / `__juce__complete` events:
+
+| Native function | Argument | Completes with | Notes |
+|---|---|---|---|
+| `amp` | one command envelope as a JSON string (an already-decoded object is accepted too) | `undefined`, immediately | Forwarded to `Bridge::handle`. The reply, like every event, arrives as a JUCE event named `amp` (`Bridge::send` → `emitEventIfBrowserIsVisible("amp", message)`). The UI correlates replies by `id` and gives up after 10 s. |
+| `chooseFolder` | — | the chosen absolute path, or `""` if cancelled | Native folder chooser (the web view has none); used to add watched folders. One chooser at a time (a second call completes with `""`). |
+
+The UI is served from the embedded `ui/dist` (`WebBrowserComponent::getResourceProviderRoot()`); with the environment
+variable `AMP_UI_DEV=1` the app loads the Vite dev server at `http://localhost:5173` instead (`cd ui && npm run dev`).
+
 ## Envelopes
 
 | Direction | Shape |
@@ -42,7 +55,8 @@ Placeholder nodes keep all their data but run as bypassed passthroughs; `toggleB
 **Settings**: `{audioDeviceType, audioDeviceName, inputChannel, outputFirstChannel, sampleRate, bufferSize,
 watchedFolders: [path], globalMappings: [{control, action, node}], footswitchKeys: {"0x04": "footswitch:L", ...}}`
 (+ in `getSettings`/`setSettings` results: `availableDevices: [name]`, `availableSampleRates: [hz]`,
-`availableBufferSizes: [n]` of the open device / current type; empty without audio).
+`availableBufferSizes: [n]`, `availableInputChannels: [name]`, `availableOutputChannels: [name]` of the open device /
+current type; empty without audio. `inputChannel` / `outputFirstChannel` index the channel-name lists).
 
 **DeviceStatus**: `{status: "Running"|"Disconnected"|"NoDevice", latencyMs, xruns}` (`xruns` = -1 when unknown).
 

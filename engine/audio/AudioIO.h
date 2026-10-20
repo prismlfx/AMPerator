@@ -61,6 +61,8 @@ public:
     juce::StringArray availableDevices() const;  // of the current device type
     juce::Array<double> sampleRates() const;      // of the open device; empty without one
     juce::Array<int> bufferSizes() const;
+    juce::StringArray inputChannelNames() const;  // of the open device; empty without one
+    juce::StringArray outputChannelNames() const;
 
 private:
     struct StartWatcher;

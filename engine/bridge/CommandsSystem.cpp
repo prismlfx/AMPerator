@@ -58,10 +58,12 @@ CommandResult Engine::getSettings()
 {
     auto v = json::settings(settings);
     juce::Array<juce::var> rates, buffers;
-    juce::StringArray devices;
+    juce::StringArray devices, inputs, outputs;
     if (audio)
     {
         devices = audio->availableDevices();
+        inputs = audio->inputChannelNames();
+        outputs = audio->outputChannelNames();
         for (auto r : audio->sampleRates())
             rates.add(r);
         for (auto b : audio->bufferSizes())
@@ -71,6 +73,8 @@ CommandResult Engine::getSettings()
     o->setProperty("availableDevices", json::strings(devices));
     o->setProperty("availableSampleRates", rates);
     o->setProperty("availableBufferSizes", buffers);
+    o->setProperty("availableInputChannels", json::strings(inputs));
+    o->setProperty("availableOutputChannels", json::strings(outputs));
     return CommandResult::success(v);
 }
 

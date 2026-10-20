@@ -297,6 +297,18 @@ juce::Array<int> AudioIO::bufferSizes() const
     return d != nullptr ? d->getAvailableBufferSizes() : juce::Array<int>();
 }
 
+juce::StringArray AudioIO::inputChannelNames() const
+{
+    auto* d = manager.getCurrentAudioDevice();
+    return d != nullptr ? d->getInputChannelNames() : juce::StringArray();
+}
+
+juce::StringArray AudioIO::outputChannelNames() const
+{
+    auto* d = manager.getCurrentAudioDevice();
+    return d != nullptr ? d->getOutputChannelNames() : juce::StringArray();
+}
+
 void AudioIO::changeListenerCallback(juce::ChangeBroadcaster*)
 {
     if (applying || ! hasWanted)

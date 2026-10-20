@@ -11,6 +11,7 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 include(CTest)
 include(cmake/Dependencies.cmake)
+include(cmake/AmpJuce.cmake)
 
 add_subdirectory(engine)
 add_subdirectory(app)

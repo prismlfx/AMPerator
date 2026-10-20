@@ -533,6 +533,10 @@ TEST_CASE("bridge: device restart rebuilds the plan at the new sample rate")
 
     auto r = f.ok("setSettings", obj({ { "sampleRate", 44100.0 }, { "bufferSize", 256 } }));
     CHECK(static_cast<double>(r["sampleRate"]) == 44100.0);
+    CHECK(r["availableInputChannels"].size() == 1);
+    CHECK(r["availableInputChannels"][0].toString() == "In 1");
+    CHECK(r["availableOutputChannels"].size() == 2);
+    CHECK(r["availableOutputChannels"][1].toString() == "Out 2");
     CHECK(f.engine->planSpec().sampleRate == 44100.0);
     CHECK(f.engine->planSpec().maxBlock == 256);
     CHECK(f.events("error").empty());
