@@ -104,7 +104,10 @@ TEST_CASE("audio_io: disconnect sets status and reconnect restores same settings
     Fixture f;
     std::vector<DeviceStatus> seen;
     f.io->onStatus = [&](DeviceStatus s) { seen.push_back(s); };
+    std::vector<std::pair<double, int>> restarts;
+    f.io->onDeviceRestarted = [&](double sr, int bs) { restarts.emplace_back(sr, bs); };
     REQUIRE(f.io->apply(Fixture::solo()).wasOk());
+    CHECK(restarts.size() == 1);
     seen.clear();
 
     f.type->removeDevice("Fake Solo");
@@ -113,6 +116,7 @@ TEST_CASE("audio_io: disconnect sets status and reconnect restores same settings
     CHECK(f.manager.getCurrentAudioDevice() == nullptr); // no silent fallback to "Fake Other": output is silent
     REQUIRE(seen.size() == 1);
     CHECK(seen[0] == DeviceStatus::Disconnected);
+    CHECK(restarts.size() == 1); // JUCE's fallback open of "Fake Other" is not reported
 
     f.type->addDevice("Fake Solo");
     f.hotPlug();
@@ -124,6 +128,49 @@ TEST_CASE("audio_io: disconnect sets status and reconnect restores same settings
     CHECK(dev->getCurrentBufferSizeSamples() == 256);
     REQUIRE(seen.size() == 2);
     CHECK(seen[1] == DeviceStatus::Running);
+    REQUIRE(restarts.size() == 2); // exactly one more, for the reconnected device
+    CHECK(restarts.back() == std::make_pair(44100.0, 256));
+}
+
+TEST_CASE("audio_io: a device switched outside apply is adopted, not closed")
+{
+    Fixture f;
+    REQUIRE(f.io->apply(Fixture::solo()).wasOk());
+    auto other = Fixture::solo();
+    other.audioDeviceName = "Fake Other";
+    REQUIRE(f.io->apply(other).wasOk());
+    f.hotPlug();
+    CHECK(f.currentName() == "Fake Other");
+    CHECK(f.io->status() == DeviceStatus::Running);
+
+    // Now switch behind AudioIO's back, straight on the manager.
+    auto setup = f.manager.getAudioDeviceSetup();
+    setup.inputDeviceName = setup.outputDeviceName = "Fake Solo";
+    REQUIRE(f.manager.setAudioDeviceSetup(setup, true).isEmpty());
+    f.manager.sendSynchronousChangeMessage();
+    CHECK(f.currentName() == "Fake Solo");
+    CHECK(f.io->status() == DeviceStatus::Running);
+    Settings out;
+    f.io->writeBack(out);
+    CHECK(out.audioDeviceName == "Fake Solo");
+}
+
+TEST_CASE("audio_io: a failed reconnect stays Disconnected")
+{
+    Fixture f;
+    std::vector<DeviceStatus> seen;
+    REQUIRE(f.io->apply(Fixture::solo()).wasOk());
+    f.io->onStatus = [&](DeviceStatus s) { seen.push_back(s); };
+    f.type->removeDevice("Fake Solo");
+    f.hotPlug();
+    f.type->addDevice("Fake Solo");
+    f.type->failOpen = true;
+    f.hotPlug();
+    CHECK(f.io->status() == DeviceStatus::Disconnected);
+    CHECK(seen == std::vector<DeviceStatus> { DeviceStatus::Disconnected }); // no NoDevice flicker
+    f.type->failOpen = false;
+    f.hotPlug();
+    CHECK(f.io->status() == DeviceStatus::Running);
 }
 
 TEST_CASE("audio_io: a stopped device is reopened once the change notification arrives")
@@ -183,7 +230,7 @@ TEST_CASE("audio_io: onDeviceRestarted reports the rate and buffer the device op
     std::vector<std::pair<double, int>> calls;
     f.io->onDeviceRestarted = [&](double sr, int bs) { calls.emplace_back(sr, bs); };
     REQUIRE(f.io->apply(Fixture::solo()).wasOk());
-    REQUIRE(! calls.empty());
+    REQUIRE(calls.size() == 1);
     CHECK(calls.back().first == 44100.0);
     CHECK(calls.back().second == 256);
 
@@ -191,6 +238,7 @@ TEST_CASE("audio_io: onDeviceRestarted reports the rate and buffer the device op
     s.sampleRate = 48000;
     s.bufferSize = 64;
     REQUIRE(f.io->apply(s).wasOk());
+    REQUIRE(calls.size() == 2);
     CHECK(calls.back().first == 48000.0);
     CHECK(calls.back().second == 64);
 }

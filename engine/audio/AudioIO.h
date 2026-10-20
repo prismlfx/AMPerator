@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -50,10 +51,11 @@ public:
     // Fired on the message thread when the status changes (not for repeated notifications of the same status).
     std::function<void(DeviceStatus)> onStatus;
 
-    // Fired on the message thread each time the device (re)opens -- initial apply, reconnect, or a driver-side
-    // restart -- with the rate and buffer size it now runs at. The engine facade rebuilds its ProcessingPlan
-    // here, because RealtimeEngine refuses plans prepared for a different sample rate. Fires after the
-    // RealtimeEngine has been prepared. (Without a MessageManager -- headless tests -- it fires inline.)
+    // Fired on the message thread exactly once per successful apply() / reconnect (after the status is Running),
+    // and for driver-side restarts of the wanted device, with the rate and buffer size it now runs at. Never
+    // fired for throwaway devices (the type's default device opened during a type switch, or JUCE's own fallback
+    // after an unplug). The engine facade rebuilds its ProcessingPlan here, because RealtimeEngine refuses plans
+    // prepared for a different sample rate. (Without a MessageManager -- headless tests -- it fires inline.)
     std::function<void(double sampleRate, int bufferSize)> onDeviceRestarted;
 
     juce::StringArray availableDevices() const;  // of the current device type
@@ -68,6 +70,8 @@ private:
     void setStatus(DeviceStatus);
     void notifyRestarted(double sampleRate, int bufferSize);
     void routeEngineChannels();
+    juce::Result applyInternal(const Settings&, bool reconnecting);
+    void setWanted(bool has, const juce::String& name);
     juce::AudioIODeviceType* findType(const Settings&) const;
 
     juce::AudioDeviceManager& manager;
@@ -76,8 +80,10 @@ private:
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 
     DeviceStatus currentStatus = DeviceStatus::NoDevice;
-    bool applying = false;
+    std::atomic<bool> applying { false };
     bool hasWanted = false;
+    juce::CriticalSection wantedNameLock; // the watcher reads the wanted name from driver threads
+    juce::String wantedName;
     Settings wanted; // what to reapply on reconnect; audioDeviceType/Name are the devices actually chosen
     int wantedInput = 0, wantedOutputFirst = 0;
 

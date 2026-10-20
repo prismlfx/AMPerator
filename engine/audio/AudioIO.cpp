@@ -3,6 +3,11 @@
 namespace amp
 {
 // Second, no-op audio callback whose only job is to hear about device (re)starts.
+namespace
+{
+constexpr int silentOutputPair = 1 << 20; // beyond any real device: every output channel is zeroed
+}
+
 struct AudioIO::StartWatcher : juce::AudioIODeviceCallback
 {
     explicit StartWatcher(AudioIO& o) : owner(o) {}
@@ -14,6 +19,18 @@ struct AudioIO::StartWatcher : juce::AudioIODeviceCallback
 
     void audioDeviceAboutToStart(juce::AudioIODevice* d) override
     {
+        if (owner.applying)
+            return; // apply() reports the final device once
+        {
+            const juce::ScopedLock sl(owner.wantedNameLock);
+            if (owner.wantedName.isNotEmpty() && d->getName() != owner.wantedName)
+            {
+                // JUCE's own fallback after an unplug (or an outside switch): keep it silent until the message
+                // thread closes or adopts it.
+                owner.engine.setOutputPair(silentOutputPair);
+                return;
+            }
+        }
         owner.notifyRestarted(d->getCurrentSampleRate(), d->getCurrentBufferSizeSamples());
     }
 
@@ -56,6 +73,13 @@ void AudioIO::notifyRestarted(double sampleRate, int bufferSize)
     });
 }
 
+void AudioIO::setWanted(bool has, const juce::String& name)
+{
+    hasWanted = has;
+    const juce::ScopedLock sl(wantedNameLock);
+    wantedName = has ? name : juce::String();
+}
+
 bool AudioIO::deviceRunning() const
 {
     auto* d = manager.getCurrentAudioDevice();
@@ -74,30 +98,44 @@ void AudioIO::setStatus(DeviceStatus s)
 juce::AudioIODeviceType* AudioIO::findType(const Settings& s) const
 {
     auto& types = manager.getAvailableDeviceTypes(); // also scans on first use
+    auto hasDevices = [](juce::AudioIODeviceType* t) { return ! t->getDeviceNames(false).isEmpty() || ! t->getDeviceNames(true).isEmpty(); };
     for (auto* t : types)
-        if (s.audioDeviceType.isNotEmpty() && t->getTypeName() == s.audioDeviceType)
+        if (s.audioDeviceType.isNotEmpty() && t->getTypeName() == s.audioDeviceType && hasDevices(t))
             return t;
     if (s.audioDeviceName.isNotEmpty())
         for (auto* t : types)
             if (t->getDeviceNames(false).contains(s.audioDeviceName) || t->getDeviceNames(true).contains(s.audioDeviceName))
                 return t;
     if (auto* current = manager.getCurrentDeviceTypeObject())
-        if (! current->getDeviceNames(false).isEmpty() || ! current->getDeviceNames(true).isEmpty())
+        if (hasDevices(current))
             return current;
     for (auto* t : types)
-        if (! t->getDeviceNames(false).isEmpty() || ! t->getDeviceNames(true).isEmpty())
+        if (hasDevices(t))
             return t;
     return nullptr;
 }
 
 juce::Result AudioIO::apply(const Settings& s)
 {
-    const juce::ScopedValueSetter<bool> guard(applying, true);
+    return applyInternal(s, false);
+}
 
-    auto fail = [this](const juce::String& message)
+juce::Result AudioIO::applyInternal(const Settings& s, bool reconnecting)
+{
+    struct Guard
     {
-        hasWanted = false;
-        setStatus(DeviceStatus::NoDevice);
+        explicit Guard(std::atomic<bool>& f) : flag(f) { flag = true; }
+        ~Guard() { flag = false; }
+        std::atomic<bool>& flag;
+    } guard(applying);
+
+    auto fail = [this, reconnecting](const juce::String& message)
+    {
+        if (! reconnecting) // a failed reconnect stays Disconnected and keeps the wanted settings
+        {
+            setWanted(false, {});
+            setStatus(DeviceStatus::NoDevice);
+        }
         return juce::Result::fail(message);
     };
 
@@ -107,6 +145,9 @@ juce::Result AudioIO::apply(const Settings& s)
 
     const auto outputNames = type->getDeviceNames(false);
     const auto inputNames = type->getDeviceNames(true);
+
+    if (outputNames.isEmpty() && inputNames.isEmpty())
+        return fail("No audio device found");
 
     juce::String name = s.audioDeviceName;
     bool usedFallback = false;
@@ -153,7 +194,13 @@ juce::Result AudioIO::apply(const Settings& s)
     if (error.isNotEmpty())
         return fail(error);
 
-    hasWanted = true;
+    if (! deviceRunning())
+    {
+        manager.closeAudioDevice();
+        return fail("The audio device did not start");
+    }
+
+    setWanted(true, name);
     wanted = s;
     wanted.audioDeviceType = type->getTypeName();
     wanted.audioDeviceName = name;
@@ -161,7 +208,9 @@ juce::Result AudioIO::apply(const Settings& s)
     wantedOutputFirst = outFirst;
 
     routeEngineChannels();
-    setStatus(deviceRunning() ? DeviceStatus::Running : DeviceStatus::NoDevice);
+    setStatus(DeviceStatus::Running);
+    auto* dev = manager.getCurrentAudioDevice();
+    notifyRestarted(dev->getCurrentSampleRate(), dev->getCurrentBufferSizeSamples());
     return juce::Result::ok();
 }
 
@@ -249,9 +298,29 @@ void AudioIO::changeListenerCallback(juce::ChangeBroadcaster*)
         return;
 
     auto* d = manager.getCurrentAudioDevice();
-    if (deviceRunning() && d->getName() == wanted.audioDeviceName)
+    const bool running = deviceRunning();
+    if (running && d->getName() == wanted.audioDeviceName)
     {
         setStatus(DeviceStatus::Running); // e.g. the manager reopened it by itself
+        return;
+    }
+
+    bool wantedListed = false;
+    for (auto* t : manager.getAvailableDeviceTypes())
+        if (t->getTypeName() == wanted.audioDeviceType)
+            wantedListed = t->getDeviceNames(false).contains(wanted.audioDeviceName)
+                        || t->getDeviceNames(true).contains(wanted.audioDeviceName);
+
+    if (running && wantedListed)
+    {
+        // Someone switched devices outside apply(): adopt what is running instead of fighting it.
+        writeBack(wanted);
+        setWanted(true, wanted.audioDeviceName);
+        wantedInput = wanted.inputChannel;
+        wantedOutputFirst = wanted.outputFirstChannel;
+        routeEngineChannels();
+        setStatus(DeviceStatus::Running);
+        notifyRestarted(d->getCurrentSampleRate(), d->getCurrentBufferSizeSamples());
         return;
     }
 
@@ -261,22 +330,7 @@ void AudioIO::changeListenerCallback(juce::ChangeBroadcaster*)
         manager.closeAudioDevice();
     setStatus(DeviceStatus::Disconnected);
 
-    const auto type = wanted.audioDeviceType;
-    for (auto* t : manager.getAvailableDeviceTypes())
-    {
-        if (t->getTypeName() != type)
-            continue;
-        if (t->getDeviceNames(false).contains(wanted.audioDeviceName) || t->getDeviceNames(true).contains(wanted.audioDeviceName))
-        {
-            const Settings again = wanted;
-            if (apply(again).failed())
-            {
-                hasWanted = true; // keep trying on the next notification
-                wanted = again;
-                setStatus(DeviceStatus::Disconnected);
-            }
-        }
-        break;
-    }
+    if (wantedListed)
+        applyInternal(Settings(wanted), true); // back again: same settings
 }
 } // namespace amp
