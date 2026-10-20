@@ -203,3 +203,95 @@ TEST_CASE("rig_store: bands includes My Tones on empty library")
     REQUIRE(b.contains("My Tones"));
     REQUIRE(b.contains("Other"));
 }
+
+TEST_CASE("rig_store: bands come from rig JSON and emptied bands vanish")
+{
+    TempDir t;
+    amp::RigStore store(t.dir);
+    auto r = rig("x", "AC/DC");
+    REQUIRE(store.save(r).wasOk());
+    auto b = store.bands();
+    REQUIRE(b.contains("AC/DC"));
+    REQUIRE_FALSE(b.contains("AC_DC"));
+
+    t.dir.getChildFile("Rigs/Empty Band").createDirectory(); // user-created empty band
+    REQUIRE(store.bands().contains("Empty Band"));
+
+    r.band = "Other";
+    REQUIRE(store.save(r).wasOk());
+    REQUIRE_FALSE(t.dir.getChildFile("Rigs/AC_DC").exists());
+    REQUIRE_FALSE(store.bands().contains("AC/DC"));
+    REQUIRE(store.bands().contains("Other"));
+}
+
+TEST_CASE("rig_store: corrupt then renamed keeps the corrupt bytes")
+{
+    TempDir t;
+    amp::RigStore store(t.dir);
+    auto r = rig("Tone");
+    REQUIRE(store.save(r).wasOk());
+    auto file = t.dir.getChildFile("Rigs/My Tones/Tone.amprig");
+    file.replaceWithText("{ corrupt");
+    r.name = "Renamed";
+    REQUIRE(store.save(r).wasOk());
+    REQUIRE_FALSE(file.exists());
+    auto parked = t.dir.getChildFile("Rigs/My Tones/Tone.amprig.corrupt");
+    REQUIRE(parked.existsAsFile());
+    REQUIRE(parked.loadFileAsString() == "{ corrupt");
+    REQUIRE(store.load(r.id).rig->name == "Renamed");
+}
+
+TEST_CASE("rig_store: remove refuses when cached path now holds a different rig")
+{
+    TempDir t;
+    amp::RigStore store(t.dir);
+    auto a = rig("Tone"), b = rig("Other");
+    REQUIRE(store.save(a).wasOk());
+    auto file = t.dir.getChildFile("Rigs/My Tones/Tone.amprig");
+    file.replaceWithText("{ corrupt"); // list() can no longer see `a`; cache remembers the path
+    file.replaceWithText(amp::serializeRig(b)); // an external tool drops another rig there
+    REQUIRE(store.remove(a.id).failed());
+    REQUIRE(file.existsAsFile());
+    REQUIRE(amp::parseRig(file.loadFileAsString()).rig->id == b.id);
+    // saving `a` must not overwrite or delete the foreign file either
+    REQUIRE(store.save(a).wasOk());
+    REQUIRE(amp::parseRig(file.loadFileAsString()).rig->id == b.id);
+}
+
+#if !JUCE_WINDOWS
+TEST_CASE("rig_store: failed write leaves backups and rig untouched")
+{
+    TempDir t;
+    amp::RigStore store(t.dir);
+    auto r = rig("Tone");
+    for (int i = 0; i < 3; ++i)
+    {
+        r.tags = { "s" + juce::String(i) };
+        REQUIRE(store.save(r).wasOk());
+    }
+    auto dir = t.dir.getChildFile("Rigs/My Tones");
+    auto before = store.backups(r.id);
+    REQUIRE(before.size() == 2);
+    auto bak1 = before[0].loadFileAsString();
+    auto current = dir.getChildFile("Tone.amprig").loadFileAsString();
+
+    REQUIRE(dir.setReadOnly(true, false));
+    auto probe = dir.getChildFile("probe");
+    if (probe.create().wasOk()) // e.g. running as root: cannot simulate
+    {
+        probe.deleteFile();
+        dir.setReadOnly(false, false);
+        SKIP("directory stays writable");
+    }
+    for (int i = 0; i < 6; ++i)
+    {
+        r.tags = { "fail" };
+        REQUIRE(store.save(r).failed());
+    }
+    dir.setReadOnly(false, false);
+
+    REQUIRE(store.backups(r.id).size() == 2);
+    REQUIRE(store.backups(r.id)[0].loadFileAsString() == bak1);
+    REQUIRE(dir.getChildFile("Tone.amprig").loadFileAsString() == current);
+}
+#endif

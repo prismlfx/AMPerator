@@ -103,3 +103,18 @@ TEST_CASE("settings: recent list capped at 10")
     f.replaceWithText(json + "]}");
     REQUIRE(amp::Settings::load(f).recentRigIds.size() == 10);
 }
+
+TEST_CASE("settings: out-of-range numbers and malformed mappings are rejected")
+{
+    TempDir t;
+    auto f = t.dir.getChildFile("settings.json");
+    f.replaceWithText(R"({"bufferSize":1e300,"sampleRate":-5,"inputChannel":1e30,"outputFirstChannel":2,
+        "globalMappings":[{"control":"footswitch:L","action":"toggleBypass"},{"control":5},{"action":"x"},"str",{}]})");
+    auto s = amp::Settings::load(f);
+    REQUIRE(s.bufferSize == 128);
+    REQUIRE(s.sampleRate == 48000.0);
+    REQUIRE(s.inputChannel == 0);
+    REQUIRE(s.outputFirstChannel == 2);
+    REQUIRE(s.globalMappings.size() == 1);
+    REQUIRE(s.globalMappings[0].control == "footswitch:L");
+}

@@ -40,7 +40,7 @@ private:
     juce::File rigsDir() const;
     juce::File fileFor(const juce::String& rigId) const;
     static juce::File backupFile(const juce::File& rig, int n);
-    static void rotateBackups(const juce::File& rig);
+    static bool rotateBackups(const juce::File& rig);
     static void moveBackups(const juce::File& from, const juce::File& to);
     static void deleteBackups(const juce::File& rig);
 

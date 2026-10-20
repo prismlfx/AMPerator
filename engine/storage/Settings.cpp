@@ -1,5 +1,9 @@
 #include "storage/Settings.h"
 
+#include <cmath>
+
+#include "storage/AtomicFile.h"
+
 namespace amp
 {
 namespace
@@ -10,16 +14,20 @@ juce::String readString(const juce::var& obj, const char* key, const juce::Strin
     return v.isString() ? v.toString() : def;
 }
 
-int readInt(const juce::var& obj, const char* key, int def)
+bool isNumber(const juce::var& v) { return v.isInt() || v.isInt64() || v.isDouble(); }
+
+double readDouble(const juce::var& obj, const char* key, double def, double lo, double hi)
 {
     auto v = obj.getProperty(key, juce::var());
-    return (v.isInt() || v.isInt64() || v.isDouble()) ? static_cast<int>(static_cast<double>(v)) : def;
+    if (!isNumber(v))
+        return def;
+    double d = static_cast<double>(v);
+    return (std::isfinite(d) && d >= lo && d <= hi) ? d : def;
 }
 
-double readDouble(const juce::var& obj, const char* key, double def)
+int readInt(const juce::var& obj, const char* key, int def, int lo, int hi)
 {
-    auto v = obj.getProperty(key, juce::var());
-    return (v.isInt() || v.isInt64() || v.isDouble()) ? static_cast<double>(v) : def;
+    return static_cast<int>(readDouble(obj, key, def, lo, hi));
 }
 
 juce::StringArray readStrings(const juce::var& obj, const char* key)
@@ -61,10 +69,10 @@ Settings Settings::load(const juce::File& file)
 
     s.audioDeviceType = readString(root, "audioDeviceType", s.audioDeviceType);
     s.audioDeviceName = readString(root, "audioDeviceName", s.audioDeviceName);
-    s.inputChannel = readInt(root, "inputChannel", s.inputChannel);
-    s.outputFirstChannel = readInt(root, "outputFirstChannel", s.outputFirstChannel);
-    s.sampleRate = readDouble(root, "sampleRate", s.sampleRate);
-    s.bufferSize = readInt(root, "bufferSize", s.bufferSize);
+    s.inputChannel = readInt(root, "inputChannel", s.inputChannel, 0, 1024);
+    s.outputFirstChannel = readInt(root, "outputFirstChannel", s.outputFirstChannel, 0, 1024);
+    s.sampleRate = readDouble(root, "sampleRate", s.sampleRate, 8000.0, 768000.0);
+    s.bufferSize = readInt(root, "bufferSize", s.bufferSize, 16, 8192);
     s.watchedFolders = readStrings(root, "watchedFolders");
     s.lastRigId = readString(root, "lastRigId", s.lastRigId);
     s.recentRigIds = readStrings(root, "recentRigIds");
@@ -73,9 +81,13 @@ Settings Settings::load(const juce::File& file)
 
     if (auto* arr = root.getProperty("globalMappings", juce::var()).getArray())
         for (auto& m : *arr)
-            if (m.getDynamicObject() != nullptr)
-                s.globalMappings.push_back({ readString(m, "control", {}), readString(m, "action", {}),
-                                             readString(m, "node", {}) });
+        {
+            if (m.getDynamicObject() == nullptr)
+                continue;
+            Mapping mm { readString(m, "control", {}), readString(m, "action", {}), readString(m, "node", {}) };
+            if (mm.control.isNotEmpty() && mm.action.isNotEmpty())
+                s.globalMappings.push_back(std::move(mm));
+        }
     return s;
 }
 
@@ -107,10 +119,7 @@ bool Settings::save(const juce::File& file) const
 
     if (!file.getParentDirectory().createDirectory())
         return false;
-    juce::TemporaryFile tmp(file, file.getSiblingFile(file.getFileName() + ".tmp"));
-    if (!tmp.getFile().replaceWithText(juce::JSON::toString(root)))
-        return false;
-    return tmp.overwriteTargetFileWithTemporary();
+    return writeFileAtomically(file, juce::JSON::toString(root));
 }
 
 void Settings::noteRecent(const juce::String& rigId)

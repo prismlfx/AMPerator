@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "storage/AtomicFile.h"
+
 namespace amp
 {
 namespace
@@ -19,11 +21,21 @@ std::vector<Scanned> scanRigs(const juce::File& rigsDir)
     return out;
 }
 
-bool writeAtomically(const juce::File& target, const juce::String& text)
+// True when touching `f` on behalf of `rigId` cannot destroy another rig's data.
+bool notForeign(const juce::File& f, const juce::String& rigId)
 {
-    juce::TemporaryFile tmp(target, target.getSiblingFile(target.getFileName() + ".tmp"));
-    return tmp.getFile().replaceWithText(text) && tmp.overwriteTargetFileWithTemporary();
+    if (!f.existsAsFile())
+        return true;
+    auto parsed = parseRig(f.loadFileAsString()).rig;
+    return !parsed || parsed->id.isEmpty() || parsed->id == rigId;
 }
+
+void pruneIfEmpty(const juce::File& dir)
+{
+    if (dir.isDirectory() && dir.getNumberOfChildFiles(juce::File::findFilesAndDirectories) == 0)
+        dir.deleteFile();
+}
+
 } // namespace
 
 RigStore::RigStore(juce::File libraryRoot) : root_(std::move(libraryRoot))
@@ -40,13 +52,13 @@ juce::File RigStore::backupFile(const juce::File& rig, int n)
     return rig.getSiblingFile(rig.getFileName() + ".bak." + juce::String(n));
 }
 
-void RigStore::rotateBackups(const juce::File& rig)
+bool RigStore::rotateBackups(const juce::File& rig)
 {
     backupFile(rig, maxBackups).deleteFile();
     for (int i = maxBackups - 1; i >= 1; --i)
-        if (auto b = backupFile(rig, i); b.existsAsFile())
-            b.moveFileTo(backupFile(rig, i + 1));
-    rig.copyFileTo(backupFile(rig, 1));
+        if (auto b = backupFile(rig, i); b.existsAsFile() && !b.moveFileTo(backupFile(rig, i + 1)))
+            return false;
+    return rig.copyFileTo(backupFile(rig, 1));
 }
 
 void RigStore::moveBackups(const juce::File& from, const juce::File& to)
@@ -116,8 +128,10 @@ juce::StringArray RigStore::bands() const
     b.add(kDefaultBand);
     for (auto& e : list())
         b.addIfNotAlreadyThere(e.band);
+    // Folder names only count for user-created folders that hold no rigs (a rig's band comes from its JSON).
     for (auto& d : rigsDir().findChildFiles(juce::File::findDirectories, false))
-        b.addIfNotAlreadyThere(d.getFileName());
+        if (d.findChildFiles(juce::File::findFiles, false, "*.amprig").isEmpty())
+            b.addIfNotAlreadyThere(d.getFileName());
     b.sortNatural();
     return b;
 }
@@ -146,7 +160,12 @@ juce::Result RigStore::save(const RigDocument& rig)
     if (rig.id.isEmpty())
         return juce::Result::fail("Rig has no id");
 
-    const auto oldFile = fileFor(rig.id);
+    auto oldFile = fileFor(rig.id);
+    // The path may come from a stale cache: never overwrite/delete a file that now holds another rig.
+    if (!notForeign(oldFile, rig.id))
+        oldFile = juce::File();
+    const bool oldIsCorrupt = oldFile != juce::File() && oldFile.existsAsFile()
+                              && !parseRig(oldFile.loadFileAsString()).rig;
     const auto bandDir = rigsDir().getChildFile(sanitizeFileName(rig.band));
     const auto base = sanitizeFileName(rig.name);
 
@@ -166,15 +185,30 @@ juce::Result RigStore::save(const RigDocument& rig)
     if (!bandDir.createDirectory())
         return juce::Result::fail("Cannot create " + bandDir.getFullPathName());
 
-    if (target.existsAsFile())
-        rotateBackups(target);
-    if (!writeAtomically(target, serializeRig(rig)))
+    const bool ok = writeFileAtomically(target, serializeRig(rig), [&] {
+        return !target.existsAsFile() || rotateBackups(target);
+    });
+    if (!ok)
         return juce::Result::fail("Cannot write " + target.getFullPathName());
 
     if (oldFile != juce::File() && oldFile != target && oldFile.existsAsFile())
     {
         moveBackups(oldFile, target);
-        oldFile.deleteFile();
+        if (oldIsCorrupt)
+        {
+            // Never delete bytes we could not parse: park them beside the rig.
+            juce::File parked;
+            for (int n = 1;; ++n)
+            {
+                parked = oldFile.getSiblingFile(oldFile.getFileName() + ".corrupt" + (n == 1 ? juce::String() : "." + juce::String(n)));
+                if (!parked.exists())
+                    break;
+            }
+            oldFile.moveFileTo(parked);
+        }
+        else
+            oldFile.deleteFile();
+        pruneIfEmpty(oldFile.getParentDirectory());
     }
     knownPaths_[rig.id] = target;
     return juce::Result::ok();
@@ -185,10 +219,13 @@ juce::Result RigStore::remove(const juce::String& rigId)
     auto f = fileFor(rigId);
     if (f == juce::File())
         return juce::Result::fail("Rig not found: " + rigId);
-    deleteBackups(f);
+    if (!notForeign(f, rigId))
+        return juce::Result::fail("Refusing to delete " + f.getFullPathName() + ": it now holds a different rig");
     if (f.existsAsFile() && !f.deleteFile())
         return juce::Result::fail("Cannot delete " + f.getFullPathName());
+    deleteBackups(f);
     knownPaths_.erase(rigId);
+    pruneIfEmpty(f.getParentDirectory());
     return juce::Result::ok();
 }
 

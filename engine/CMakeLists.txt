@@ -43,6 +43,8 @@ add_library(amp_engine STATIC
   model/RigDocument.h
   plugins/PluginHost.cpp
   plugins/PluginHost.h
+  storage/AtomicFile.cpp
+  storage/AtomicFile.h
   storage/RigStore.cpp
   storage/RigStore.h
   storage/Settings.cpp
