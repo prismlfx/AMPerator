@@ -28,6 +28,8 @@ add_library(amp_engine STATIC
   control/HidFootswitch.cpp
   control/HidFootswitch.h
   control/MidiControl.cpp
+  control/MappingEngine.cpp
+  control/MappingEngine.h
   control/MidiControl.h
   assets/AssetIndex.cpp
   assets/AssetIndex.h
