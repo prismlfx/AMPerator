@@ -124,7 +124,7 @@ TEST_CASE("tuner: fewer than one window pushed returns nullopt")
     CHECK(t.poll().has_value());
 }
 
-TEST_CASE("tuner: poll uses the latest window after overflow")
+TEST_CASE("tuner: poll tracks pitch changes")
 {
     TunerTap t; t.prepare(48000.0);
     feed(t, sine(110.0, 48000.0, 5000));
@@ -146,4 +146,63 @@ TEST_CASE("tuner: push allocates nothing")
         for (int i = 0; i < 40; ++i) t.push(s.data(), (int) s.size()); // also overruns the ring
     }
     CHECK(RtSafety::violations() == 0);
+}
+
+namespace
+{
+std::vector<float> harm(double hz, double sr, int n, float a1, float a2, float a3)
+{
+    std::vector<float> v((size_t) n);
+    for (int i = 0; i < n; ++i)
+    {
+        const double ph = 2.0 * kPi * hz * i / sr;
+        v[(size_t) i] = a1 * (float) std::sin(ph) + a2 * (float) std::sin(2 * ph) + a3 * (float) std::sin(3 * ph);
+    }
+    return v;
+}
+} // namespace
+
+TEST_CASE("tuner: overflow discards stale audio and resyncs")
+{
+    TunerTap t; t.prepare(48000.0);
+    feed(t, sine(110.0, 48000.0, 20000)); // > ring size (8192) with no polling
+    CHECK_FALSE(t.poll().has_value());     // overflow detected: resync, nothing analysed
+    feed(t, sine(196.0, 48000.0, 3000));   // fresh window
+    auto r = t.poll();
+    REQUIRE(r.has_value());
+    CHECK(r->note == "G");
+    CHECK(r->octave == 3);
+}
+
+TEST_CASE("tuner: reset discards buffered audio")
+{
+    TunerTap t; t.prepare(48000.0);
+    feed(t, sine(110.0, 48000.0, 5000));
+    t.reset();
+    CHECK_FALSE(t.poll().has_value());
+    feed(t, sine(196.0, 48000.0, 3000));
+    auto r = t.poll();
+    REQUIRE(r.has_value());
+    CHECK(r->note == "G");
+}
+
+TEST_CASE("tuner: strong 2nd harmonic keeps the fundamental octave")
+{
+    for (double f : { 82.41, 196.0 })
+    {
+        TunerTap t; t.prepare(48000.0);
+        feed(t, harm(f, 48000.0, 6000, 0.3f, 1.2f, 0.1f));
+        auto r = t.poll();
+        REQUIRE(r.has_value());
+        CHECK_THAT(r->hz, Catch::Matchers::WithinRel((float) f, 0.02f));
+    }
+}
+
+TEST_CASE("tuner: repeated poll without new audio repeats then expires")
+{
+    TunerTap t; t.prepare(48000.0);
+    feed(t, sine(110.0, 48000.0, 3000));
+    REQUIRE(t.poll().has_value());
+    for (int i = 0; i < TunerTap::kMaxStalePolls; ++i) CHECK(t.poll().has_value());
+    CHECK_FALSE(t.poll().has_value());
 }

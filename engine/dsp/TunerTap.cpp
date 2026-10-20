@@ -18,14 +18,45 @@ void TunerTap::prepare(double sampleRate)
     diff.assign((size_t) kWindow, 0.0f);
     historyPos = 0;
     consumed = 0;
+    overflowed.store(false);
+    lastReading.reset();
+    stalePolls = 0;
+}
+
+void TunerTap::discardAll()
+{
+    const int ready = fifo.getNumReady();
+    if (ready > 0)
+    {
+        int s1, n1, s2, n2;
+        fifo.prepareToRead(ready, s1, n1, s2, n2);
+        fifo.finishedRead(n1 + n2);
+    }
+    consumed = 0;
+    historyPos = 0;
+    lastReading.reset();
+    stalePolls = 0;
+}
+
+void TunerTap::reset()
+{
+    if (ring.empty())
+        return;
+    overflowed.store(false);
+    discardAll();
 }
 
 void TunerTap::push(const float* samples, int numSamples)
 {
     if (ring.empty() || samples == nullptr || numSamples <= 0)
         return;
+    if (numSamples > fifo.getFreeSpace())
+    {
+        overflowed.store(true, std::memory_order_release); // drop the whole block; consumer will resync
+        return;
+    }
     int s1, n1, s2, n2;
-    fifo.prepareToWrite(numSamples, s1, n1, s2, n2); // writes as many as fit; the rest (newest) are dropped
+    fifo.prepareToWrite(numSamples, s1, n1, s2, n2);
     if (n1 > 0) std::copy(samples, samples + n1, ring.begin() + s1);
     if (n2 > 0) std::copy(samples + n1, samples + n1 + n2, ring.begin() + s2);
     fifo.finishedWrite(n1 + n2);
@@ -35,6 +66,12 @@ std::optional<TunerReading> TunerTap::poll()
 {
     if (ring.empty())
         return std::nullopt;
+
+    if (overflowed.exchange(false, std::memory_order_acquire))
+    {
+        discardAll();
+        return std::nullopt;
+    }
 
     const int rawWindow = (int) history.size();
     const int ready = fifo.getNumReady();
@@ -56,6 +93,24 @@ std::optional<TunerReading> TunerTap::poll()
     }
     if (consumed < rawWindow)
         return std::nullopt;
+
+    if (ready == 0) // nothing new since the last poll: don't re-analyse the same audio
+    {
+        if (lastReading && stalePolls < kMaxStalePolls)
+        {
+            ++stalePolls;
+            return lastReading;
+        }
+        return std::nullopt;
+    }
+    stalePolls = 0;
+    lastReading = analyse();
+    return lastReading;
+}
+
+std::optional<TunerReading> TunerTap::analyse()
+{
+    const int rawWindow = (int) history.size();
 
     // Linearise oldest -> newest (historyPos is the oldest sample), decimating by averaging.
     for (int i = 0; i < kWindow; ++i)
@@ -108,6 +163,17 @@ std::optional<TunerReading> TunerTap::poll()
     if (tau < 0)
         return std::nullopt;
 
+    // Octave-high guard: when the 2nd harmonic dominates, d'(tau) is small but d'(2*tau) is clearly smaller.
+    // (A clean periodic signal has d'(2*tau) ~ d'(tau), so it is not moved down.)
+    if (2 * tau + 2 <= tauMax)
+    {
+        int best = 2 * tau;
+        for (int t = 2 * tau - 2; t <= 2 * tau + 2; ++t)
+            if (diff[(size_t) t] < diff[(size_t) best]) best = t;
+        if (diff[(size_t) best] + kOctaveMargin < diff[(size_t) tau])
+            tau = best;
+    }
+
     // Parabolic interpolation around the minimum.
     double refined = tau;
     if (tau > 1 && tau + 1 <= tauMax)
@@ -117,9 +183,7 @@ std::optional<TunerReading> TunerTap::poll()
         if (std::abs(denom) > 1e-12)
             refined = tau + 0.5 * (a - c) / denom;
     }
-    const double hz = effectiveRate / refined;
-    if (! std::isfinite(hz) || hz < kMinHz * 0.9 || hz > kMaxHz * 1.1)
-        return std::nullopt;
+    const double hz = std::clamp(effectiveRate / refined, (double) kMinHz, (double) kMaxHz);
 
     const double midi = 69.0 + 12.0 * std::log2(hz / 440.0);
     int nearest = (int) std::lround(midi);
