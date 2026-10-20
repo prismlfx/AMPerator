@@ -5,7 +5,6 @@
 #include "dsp/NamAmpNode.h"
 #include "model/ChainGraph.h"
 
-#include <map>
 
 namespace amp
 {
@@ -60,17 +59,27 @@ std::optional<LiveRig> RigLoader::build(const RigDocument& doc, const ProcessSpe
         if (n.type == NodeType::Input || n.type == NodeType::Output)
             continue;
 
-        // Resolves the node's asset as `kind`; returns the file, or an empty File (reported) when missing.
-        auto resolveAsset = [&](const juce::String& kind) -> juce::File
+        // Resolves the node's asset as `kind`.
+        auto resolveAsset = [&](const juce::String& kind)
         {
             auto ref = *n.asset;
             ref.kind = kind;
-            const auto r = assets.resolve(ref);
-            if (r.how == ResolveKind::Missing)
-                return {};
-            if (r.how == ResolveKind::ByFilename)
-                live.report.resolvedByFilename.add(r.file.getFullPathName());
-            return r.file;
+            return assets.resolve(ref);
+        };
+        // After a successful load: a file matched by name is reported, and its hash kept for capture().
+        auto noteLoaded = [&](const Resolved& r, const juce::String& kind)
+        {
+            if (r.how != ResolveKind::ByFilename)
+                return;
+            live.report.resolvedByFilename.add(r.file.getFullPathName());
+            juce::String sha;
+            for (const auto& e : assets.list(kind))
+                if (e.file == r.file)
+                    sha = e.sha256;
+            if (sha.isEmpty())
+                sha = AssetIndex::sha256Of(r.file);
+            if (sha.isNotEmpty())
+                live.filenameMatchedSha[n.id] = sha;
         };
 
         std::unique_ptr<ProcessorNode> node;
@@ -84,14 +93,15 @@ std::optional<LiveRig> RigLoader::build(const RigDocument& doc, const ProcessSpe
                 if (hasAsset(n))
                 {
                     juce::String loadError;
-                    const auto file = resolveAsset("nam");
-                    auto model = file != juce::File() ? NamAmpNode::loadModel(file, loadError) : nullptr;
+                    const auto r = resolveAsset("nam");
+                    auto model = r.how != ResolveKind::Missing ? NamAmpNode::loadModel(r.file, loadError) : nullptr;
                     if (model == nullptr)
                     {
                         live.report.missingAssets.add(assetLabel(*n.asset));
                         break;
                     }
                     nam->setModel(std::move(model));
+                    noteLoaded(r, "nam");
                 }
                 node = std::move(nam);
                 break;
@@ -102,12 +112,13 @@ std::optional<LiveRig> RigLoader::build(const RigDocument& doc, const ProcessSpe
                 if (hasAsset(n))
                 {
                     juce::String loadError;
-                    const auto file = resolveAsset("ir");
-                    if (file == juce::File() || ! cab->loadIR(file, loadError))
+                    const auto r = resolveAsset("ir");
+                    if (r.how == ResolveKind::Missing || ! cab->loadIR(r.file, loadError))
                     {
                         live.report.missingAssets.add(assetLabel(*n.asset));
                         break;
                     }
+                    noteLoaded(r, "ir");
                 }
                 node = std::move(cab);
                 break;
@@ -168,25 +179,10 @@ RigDocument RigLoader::capture(const LiveRig& live) const
         if (n.type == NodeType::Plugin)
             n.state = pn->node->getState();
 
-        // A file matched by name (stale hash in the doc): store the matched file's hash so the next load
+        // A file matched by name (stale hash in the doc): store the loaded file's hash so the next load
         // resolves by hash even if the file is renamed later.
-        if ((n.type == NodeType::NamAmp || n.type == NodeType::CabIR) && hasAsset(n))
-        {
-            auto ref = *n.asset;
-            ref.kind = n.type == NodeType::NamAmp ? "nam" : "ir";
-            const auto r = assets.resolve(ref);
-            if (r.how == ResolveKind::ByFilename)
-            {
-                juce::String sha;
-                for (const auto& e : assets.list(ref.kind))
-                    if (e.file == r.file)
-                        sha = e.sha256;
-                if (sha.isEmpty())
-                    sha = AssetIndex::sha256Of(r.file);
-                if (sha.isNotEmpty())
-                    n.asset->sha256 = sha;
-            }
-        }
+        if (const auto it = live.filenameMatchedSha.find(n.id); it != live.filenameMatchedSha.end() && n.asset)
+            n.asset->sha256 = it->second;
     }
     return doc;
 }

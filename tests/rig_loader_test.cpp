@@ -321,11 +321,73 @@ TEST_CASE("rig_loader: asset matched by filename is reported and gets the file's
     REQUIRE(live->report.resolvedByFilename == juce::StringArray { file.getFullPathName() });
     REQUIRE(dynamic_cast<amp::NamAmpNode*>(live->plan->find("amp")->node.get()) != nullptr);
     REQUIRE(findDoc(live->doc, "amp")->asset->sha256 == "0000stale"); // doc untouched by build
+    REQUIRE(live->filenameMatchedSha.at("amp") == amp::AssetIndex::sha256Of(file));
 
+    // capture() uses the hash recorded at build, not the (now changed) index.
+    f.index.setRoots({});
     const auto captured = f.loader->capture(*live);
     const auto* capturedAmp = &captured.nodes[1];
     REQUIRE(capturedAmp->asset->sha256 == amp::AssetIndex::sha256Of(file));
     REQUIRE(capturedAmp->asset->file == "Models/tiny.nam");
+}
+
+TEST_CASE("rig_loader: unloadable asset becomes bypassed placeholder and is reported missing")
+{
+    Fixture f;
+    const auto garbage = f.assetRoot.getChildFile("garbage.nam");
+    REQUIRE(garbage.replaceWithText("this is not a NAM model"));
+    f.index.setRoots({ f.assetRoot });
+    f.index.rescan();
+
+    auto byHash = nodeOf(amp::NodeType::NamAmp, "byHash");
+    byHash.asset = assetRef("nam", "Models/whatever.nam", amp::AssetIndex::sha256Of(garbage));
+    auto byName = nodeOf(amp::NodeType::NamAmp, "byName");
+    byName.asset = assetRef("nam", "Models/garbage.nam", "0000stale");
+
+    juce::String error;
+    auto live = f.loader->build(chainOf({ byHash, byName }), spec, error);
+    REQUIRE(live.has_value());
+    REQUIRE(live->report.placeholderNodeIds == juce::StringArray { "byHash", "byName" });
+    REQUIRE(live->report.missingAssets == juce::StringArray { "Models/whatever.nam", "Models/garbage.nam" });
+    REQUIRE(live->report.resolvedByFilename.isEmpty()); // only successfully loaded assets are listed
+    REQUIRE(live->filenameMatchedSha.empty());
+    REQUIRE(live->plan->find("byHash")->bypass.load());
+    REQUIRE(dynamic_cast<amp::NamAmpNode*>(live->plan->find("byHash")->node.get()) == nullptr);
+    REQUIRE(findDoc(f.loader->capture(*live), "byName")->asset->sha256 == "0000stale");
+}
+
+TEST_CASE("rig_loader: missing-asset placeholder keeps params and bypass through capture and save")
+{
+    Fixture f;
+    auto namDoc = nodeOf(amp::NodeType::NamAmp, "amp");
+    namDoc.asset = assetRef("nam", "Models/gone.nam", "deadbeef");
+    namDoc.bypass = true;
+    namDoc.params.set("inputGain", 4.5);
+    namDoc.params.set("outputGain", -3.0);
+    auto cab = nodeOf(amp::NodeType::CabIR, "cab");
+    cab.asset = assetRef("ir", "IRs/gone.wav", "feedface");
+    cab.bypass = false;
+    cab.params.set("lowCut", 120.0);
+
+    juce::String error;
+    auto live = f.loader->build(chainOf({ namDoc, cab }), spec, error);
+    REQUIRE(live.has_value());
+    REQUIRE(live->report.placeholderNodeIds == juce::StringArray { "amp", "cab" });
+
+    const auto reparsed = amp::parseRig(amp::serializeRig(f.loader->capture(*live)));
+    REQUIRE(reparsed.rig.has_value());
+    const auto* a = findDoc(*reparsed.rig, "amp");
+    REQUIRE(a->type == amp::NodeType::NamAmp);
+    REQUIRE(a->bypass);
+    REQUIRE(a->params.size() == 2);
+    REQUIRE(paramOf(a->params, "inputGain") == 4.5f);
+    REQUIRE(paramOf(a->params, "outputGain") == -3.0f);
+    REQUIRE(a->asset->file == "Models/gone.nam");
+    REQUIRE(a->asset->sha256 == "deadbeef");
+    const auto* c = findDoc(*reparsed.rig, "cab");
+    REQUIRE_FALSE(c->bypass); // placeholder runs bypassed, but the doc keeps its own flag
+    REQUIRE(c->params.size() == 1);
+    REQUIRE(paramOf(c->params, "lowCut") == 120.0f);
 }
 
 TEST_CASE("rig_loader: capture reflects param and bypass changes")

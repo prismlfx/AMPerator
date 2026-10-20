@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <memory>
 #include <optional>
 
@@ -14,7 +15,7 @@ struct LoadReport
 {
     juce::StringArray missingAssets, missingPlugins; // asset file names / plugin names that could not be loaded
     juce::StringArray placeholderNodeIds;            // nodes running as bypassed placeholders
-    juce::StringArray resolvedByFilename;            // asset files matched by name, not hash (warn the user)
+    juce::StringArray resolvedByFilename;            // loaded asset files matched by name, not hash (warn the user)
 };
 
 struct LiveRig
@@ -22,6 +23,8 @@ struct LiveRig
     RigDocument doc;
     std::shared_ptr<ProcessingPlan> plan;
     LoadReport report;
+    // Node id -> sha256 of the asset file build() loaded, for assets matched by file name (stale doc hash).
+    std::map<juce::String, juce::String> filenameMatchedSha;
 };
 
 // Turns a RigDocument into a prepared ProcessingPlan and captures live state back into a document.
@@ -42,8 +45,8 @@ public:
 
     // live.doc with each loaded node's current bypass (from the plan), params (getParams(), merged over the
     // doc's) and, for plugins, state (getState()). Placeholder nodes are returned unchanged. An asset that was
-    // matched by file name gets the matched file's sha256, so the next load resolves it by hash.
-    // Call on the thread that owns the AssetIndex (message thread).
+    // matched by file name gets the loaded file's sha256 (from filenameMatchedSha), so the next load resolves
+    // it by hash. Does not touch the AssetIndex.
     RigDocument capture(const LiveRig&) const;
 
 private:
