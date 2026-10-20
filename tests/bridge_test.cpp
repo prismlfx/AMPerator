@@ -588,3 +588,82 @@ TEST_CASE("bridge: denied microphone permission is a startup error and leaves au
     CHECK(st["startupErrors"][0]["message"].toString().contains("Privacy & Security"));
     CHECK(f.lastEvent("error")["context"].toString() == "audioPermission");
 }
+
+TEST_CASE("bridge: saveRig with name and band renames the rig and moves it to that band")
+{
+    Fixture f;
+    const auto id = f.ok("newRig", obj({ { "name", "Draft" }, { "band", "Scratch" } }))["id"].toString();
+    f.ok("saveRig");
+    REQUIRE(f.rigFile("Scratch", "Draft").existsAsFile());
+
+    auto r = f.ok("saveRig", obj({ { "name", "  Black Dog " }, { "band", "Zeppelin" } }));
+    CHECK(r["id"].toString() == id);
+    CHECK(r["name"].toString() == "Black Dog");
+    CHECK(r["band"].toString() == "Zeppelin");
+    CHECK(f.rigFile("Zeppelin", "Black Dog").existsAsFile());
+    CHECK_FALSE(f.rigFile("Scratch", "Draft").existsAsFile());
+    CHECK(f.state()["rig"]["name"].toString() == "Black Dog");
+
+    auto list = f.ok("listRigs");
+    REQUIRE(list["rigs"].getArray()->size() == 1);
+    CHECK(list["rigs"][0]["band"].toString() == "Zeppelin");
+
+    // Blank values keep the current name/band.
+    r = f.ok("saveRig", obj({ { "name", " " }, { "band", "" } }));
+    CHECK(r["name"].toString() == "Black Dog");
+    CHECK(r["band"].toString() == "Zeppelin");
+}
+
+TEST_CASE("bridge: beforeNodesReplaced fires before rig loads, structural edits, not live edits")
+{
+    std::vector<bool> calls; // outlives the engine: ~Engine calls the hook too
+    Fixture f;
+    f.engine->beforeNodesReplaced = [&](bool sameRig) { calls.push_back(sameRig); };
+
+    f.ok("setParam", obj({ { "id", f.nodeOfType("Gate") }, { "name", "threshold" }, { "value", -50.0 } }));
+    f.ok("toggleBypass", obj({ { "id", f.nodeOfType("Gate") } }));
+    CHECK(calls.empty());
+
+    f.ok("addNode", obj({ { "type", "EQ" }, { "index", 1 } }));
+    REQUIRE(calls.size() == 1);
+    CHECK(calls.back() == true); // the same rig, rebuilt
+
+    f.ok("newRig");
+    REQUIRE(calls.size() == 2);
+    CHECK(calls.back() == false); // another rig
+
+    CHECK_FALSE(static_cast<bool>(f.call("moveNode", obj({ { "id", "nope" }, { "index", 1 } }))["ok"]));
+    CHECK(calls.size() == 2); // a failed edit replaces nothing
+
+    f.engine.reset();
+    REQUIRE(calls.size() == 3);
+    CHECK(calls.back() == false); // the engine going away destroys the nodes too
+}
+
+TEST_CASE("bridge: openPluginEditor hands the live plugin instance and node id to the app")
+{
+    Fixture f;
+    CHECK_FALSE(static_cast<bool>(f.call("openPluginEditor", obj({ { "id", f.nodeOfType("Gate") } }))["ok"]));
+
+    f.ok("rescanPlugins");
+    juce::var gain;
+    for (auto& p : *f.ok("listPlugins")["plugins"].getArray())
+        if (p["name"].toString() == "FakeGain")
+            gain = p;
+    REQUIRE(gain.isObject());
+    const auto id = f.ok("addNode", obj({ { "type", "Plugin" }, { "index", 0 }, { "plugin", gain } }))["id"].toString();
+
+    CHECK_FALSE(static_cast<bool>(f.call("openPluginEditor", obj({ { "id", id } }))["ok"])); // no app hook yet
+
+    juce::AudioPluginInstance* opened = nullptr;
+    juce::String openedId;
+    f.engine->onOpenPluginEditor = [&](juce::AudioPluginInstance* p, const juce::String& nodeId)
+    {
+        opened = p;
+        openedId = nodeId;
+    };
+    f.ok("openPluginEditor", obj({ { "id", id } }));
+    REQUIRE(opened != nullptr);
+    CHECK(opened->getName() == "FakeGain");
+    CHECK(openedId == id);
+}

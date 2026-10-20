@@ -60,7 +60,7 @@ describe('store', () => {
     expect(s.connected).toBe(true);
     expect(s.rig?.name).toBe('Clean');
     expect(s.deviceStatus.latencyMs).toBe(8.1);
-    expect(s.view).toBe('stage');
+    expect(s.view).toBe('edit');
   });
 
   it('updates from events and notifies subscribers; unsubscribe stops them', async () => {
@@ -162,5 +162,14 @@ describe('onToastableError', () => {
     err({ message: 'Microphone access denied', context: 'audioPermission' });
     expect(toast).not.toHaveBeenCalled();
     expect(state.store.get().startupErrors).toEqual([{ message: 'Microphone access denied', context: 'audioPermission' }]);
+  });
+});
+
+describe('rigSaved', () => {
+  it('applies the saved name/band and marks an unsaved rig as saved', async () => {
+    await started({ saved: false });
+    state.rigSaved('Black Dog', 'Zeppelin');
+    const s = state.store.get();
+    expect([s.rig?.name, s.rig?.band, s.saved]).toEqual(['Black Dog', 'Zeppelin', true]);
   });
 });

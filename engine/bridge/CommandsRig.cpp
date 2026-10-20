@@ -58,11 +58,15 @@ CommandResult Engine::newRig(const juce::String& name, const juce::String& band)
     return CommandResult::success(json::object({ { "id", doc.id } }));
 }
 
-CommandResult Engine::saveRig()
+CommandResult Engine::saveRig(const juce::String& name, const juce::String& band)
 {
     if (! live)
         return CommandResult::failure("no rig loaded");
     auto doc = currentDoc();
+    if (name.trim().isNotEmpty())
+        doc.name = name.trim();
+    if (band.trim().isNotEmpty())
+        doc.band = band.trim();
     if (const auto r = store.save(doc); r.failed())
         return CommandResult::failure(r.getErrorMessage());
     live->doc = doc;
@@ -72,7 +76,7 @@ CommandResult Engine::saveRig()
     saveSettings();
     dirty = false;
     bridge().emit("rigDirty", json::object({ { "dirty", false } }));
-    return CommandResult::success(json::object({ { "id", doc.id } }));
+    return CommandResult::success(json::object({ { "id", doc.id }, { "name", doc.name }, { "band", doc.band } }));
 }
 
 CommandResult Engine::deleteRig(const juce::String& id)

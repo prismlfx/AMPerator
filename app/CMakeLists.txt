@@ -53,7 +53,7 @@ juce_add_binary_data(amp_ui_data HEADER_NAME AmpUiData.h NAMESPACE AmpUiData SOU
 add_dependencies(amp_ui_data amp_ui)
 
 # ---- App ------------------------------------------------------------------------------------------------------
-target_sources(AMPerator PRIVATE Main.cpp MainWindow.cpp MainWindow.h MicrophonePermission.h MicrophonePermission.cpp)
+target_sources(AMPerator PRIVATE Main.cpp MainWindow.cpp MainWindow.h PluginWindow.cpp PluginWindow.h MicrophonePermission.h MicrophonePermission.cpp)
 if(APPLE)
   target_sources(AMPerator PRIVATE MicrophonePermission.mm)
   target_link_libraries(AMPerator PRIVATE "-framework AVFoundation")

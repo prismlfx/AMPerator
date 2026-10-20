@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "PluginWindow.h"
 
 #include "Engine.h"
 #include "bridge/Bridge.h"
@@ -172,9 +173,20 @@ private:
 };
 
 //==============================================================================
-MainWindow::MainWindow(Engine& engine)
-    : DocumentWindow("AMPerator", juce::Colour(0xff121316), DocumentWindow::allButtons)
+MainWindow::MainWindow(Engine& e)
+    : DocumentWindow("AMPerator", juce::Colour(0xff121316), DocumentWindow::allButtons),
+      engine(e),
+      pluginWindows(std::make_unique<PluginWindows>([&e](const juce::String& nodeId) { e.openPluginEditor(nodeId); }))
 {
+    engine.onOpenPluginEditor = [this](juce::AudioPluginInstance* instance, const juce::String& nodeId)
+    {
+        if (instance != nullptr)
+            pluginWindows->open(*instance, nodeId);
+    };
+    // Every rebuild creates fresh plugin instances: close the editors first. A rebuild of the same rig (structural
+    // edit, device rate change) reopens the editors of the nodes that are still there.
+    engine.beforeNodesReplaced = [this](bool sameRig) { pluginWindows->closeAll(sameRig); };
+
     setUsingNativeTitleBar(true);
     setContentOwned(new Content(engine), false);
     setResizable(true, true);
@@ -183,7 +195,12 @@ MainWindow::MainWindow(Engine& engine)
     setVisible(true);
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    engine.onOpenPluginEditor = nullptr;
+    engine.beforeNodesReplaced = nullptr;
+    pluginWindows.reset(); // closes every editor while the engine (and its plugin instances) still exists
+}
 
 void MainWindow::closeButtonPressed()
 {

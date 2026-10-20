@@ -90,6 +90,10 @@ public:
 
     /** The Engine cannot own windows: the app sets this to open a hosted plugin's editor. */
     std::function<void(juce::AudioPluginInstance*, const juce::String& nodeId)> onOpenPluginEditor;
+    /** Called just before the live rig's nodes are replaced -- a rig load/new rig (sameRig = false), a structural
+        edit or a device-rate rebuild of the current rig (sameRig = true) -- and from ~Engine. Every plugin instance
+        handed to onOpenPluginEditor is destroyed after this returns, so the app must close their editors here. */
+    std::function<void(bool sameRig)> beforeNodesReplaced;
 
     /** As if a footswitch/MIDI control produced `e` (test hook; also the path real controls take). */
     void injectControl(const ControlEvent& e);
@@ -101,7 +105,8 @@ public:
     CommandResult listRigs();
     CommandResult loadRig(const juce::String& id);
     CommandResult newRig(const juce::String& name, const juce::String& band);
-    CommandResult saveRig();
+    /** Non-blank name/band (trimmed) rename the rig / move it to that band before it is written. */
+    CommandResult saveRig(const juce::String& name = {}, const juce::String& band = {});
     CommandResult deleteRig(const juce::String& id);
     CommandResult stepRig(int direction); // +1 nextRig, -1 prevRig
     CommandResult addNode(NodeType, int index, const juce::var& plugin, const juce::String& assetFile);
@@ -129,6 +134,7 @@ private:
 
     // Rig lifecycle
     juce::String installRig(const RigDocument&, bool saved, bool structuralEdit);
+    void replaceLive(LiveRig&&, bool sameRig);
     CommandResult structuralEdit(const std::function<juce::String(RigDocument&)>& edit);
     void rebuildForDevice(double sampleRate, int bufferSize);
     void loadInitialRig();

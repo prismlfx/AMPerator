@@ -91,8 +91,9 @@ export function invokeNative(name: string, ...params: unknown[]): Promise<unknow
   return result;
 }
 
-/** Sends a bridge command; resolves with its `result`, rejects with its `error` or after 10 s without a reply. */
-export function call<T = any>(cmd: string, args?: object): Promise<T> {
+/** Sends a bridge command; resolves with its `result`, rejects with its `error` or after `timeoutMs` (default 10 s)
+    without a reply. Commands that block the engine for long (rescanPlugins) pass a longer timeout. */
+export function call<T = any>(cmd: string, args?: object, timeoutMs = CALL_TIMEOUT_MS): Promise<T> {
   if (!attach()) return Promise.reject(new Error('not running inside AMPerator (no native backend)'));
   const id = nextCallId++;
   const envelope: Record<string, unknown> = { v: PROTOCOL_VERSION, cmd, id };
@@ -101,8 +102,8 @@ export function call<T = any>(cmd: string, args?: object): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingCalls.delete(id);
-      reject(new Error(`${cmd}: no reply from the engine within ${CALL_TIMEOUT_MS / 1000} s`));
-    }, CALL_TIMEOUT_MS);
+      reject(new Error(`${cmd}: no reply from the engine within ${timeoutMs / 1000} s`));
+    }, timeoutMs);
     pendingCalls.set(id, { resolve, reject, timer });
     invokeNative('amp', JSON.stringify(envelope)).catch(() => {}); // the reply comes as an "amp" event
   });

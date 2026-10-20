@@ -185,7 +185,8 @@ const std::map<juce::String, Handler>& commands()
         { "loadRig", [](Engine& e, const juce::var& a) { return e.loadRig(nonEmpty(a, "id")); } },
         { "newRig", [](Engine& e, const juce::var& a)
           { return e.newRig(optStr(a, "name").value_or("New Rig"), optStr(a, "band").value_or("My Tones")); } },
-        { "saveRig", [](Engine& e, const juce::var&) { return e.saveRig(); } },
+        { "saveRig", [](Engine& e, const juce::var& a)
+          { return e.saveRig(optStr(a, "name").value_or(""), optStr(a, "band").value_or("")); } },
         { "deleteRig", [](Engine& e, const juce::var& a) { return e.deleteRig(nonEmpty(a, "id")); } },
         { "nextRig", [](Engine& e, const juce::var&) { return e.stepRig(+1); } },
         { "prevRig", [](Engine& e, const juce::var&) { return e.stepRig(-1); } },

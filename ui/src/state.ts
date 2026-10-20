@@ -14,11 +14,18 @@ export interface RigNode {
   [key: string]: unknown;
 }
 
+export interface Mapping {
+  control: string;
+  action: string;
+  node: string;
+}
+
 export interface Rig {
   id: string;
   name: string;
   band: string;
   nodes: RigNode[];
+  mappings?: Mapping[];
   [key: string]: unknown;
 }
 
@@ -85,7 +92,7 @@ export interface AppState {
 
 const initialState: AppState = {
   connected: false,
-  view: 'stage',
+  view: 'edit', // until the stage view exists (Task 19)
   rig: null,
   report: { missingAssets: [], missingPlugins: [], placeholderNodeIds: [], resolvedByFilename: [] },
   dirty: false,
@@ -128,6 +135,21 @@ export function setView(view: View) {
   update({ view });
 }
 
+/** After learnMapping succeeded (the engine arms learn; `learned` or a rig load ends it). */
+export function setLearning(learning: boolean) {
+  update({ learning });
+}
+
+/** After saveRig succeeded: the engine confirms the saved name/band in its reply (no rigLoaded). */
+export function rigSaved(name: string, band: string) {
+  if (current.rig) update({ rig: { ...current.rig, name, band }, saved: true });
+}
+
+/** setNodeArt's reply (the engine announces no event for it). */
+export function patchNode(id: string, patch: Partial<RigNode>) {
+  updateNode(id, (n) => ({ ...n, ...patch }));
+}
+
 export function setSettings(settings: Partial<Settings>) {
   update({ settings });
 }
@@ -164,7 +186,14 @@ export async function initStore(): Promise<void> {
     on('paramChanged', (d) => updateNode(d.id, (n) => ({ ...n, params: { ...n.params, [d.name]: d.value } })));
     on('deviceStatus', (d) => update({ deviceStatus: d }));
     on('controlStatus', (d) => update({ controlStatus: d }));
-    on('learned', () => update({ learning: false }));
+    on('learned', (d) => {
+      // The control now toggles d.node in this rig, replacing whatever it mapped before.
+      const rig = current.rig;
+      if (!rig) return update({ learning: false });
+      const mappings = (rig.mappings ?? []).filter((m) => m.control !== d.control);
+      mappings.push({ control: d.control, action: 'toggleBypass', node: d.node });
+      update({ learning: false, rig: { ...rig, mappings } });
+    });
   }
   const s = await call<any>('getState');
   update({

@@ -168,6 +168,8 @@ void Engine::startAudio(bool permissionGranted)
 
 Engine::~Engine()
 {
+    if (live && beforeNodesReplaced)
+        beforeNodesReplaced(false);
     meterTimer.stopTimer();
     tunerTimer.stopTimer();
     statusTimer.stopTimer();
@@ -205,7 +207,7 @@ juce::String Engine::installRig(const RigDocument& doc, bool isSaved, bool isStr
             return message;
         reportError(message, "swapPlan"); // nothing to keep: install it anyway so there always is a rig
     }
-    live = std::move(*built);
+    replaceLive(std::move(*built), isStructuralEdit);
     refreshMappings();
     if (isStructuralEdit)
     {
@@ -253,7 +255,14 @@ void Engine::rebuildForDevice(double sampleRate, int bufferSize)
         reportError("the audio engine refused the rebuilt plan", "deviceRestart"); // keep the previous rig
         return;
     }
-    live = std::move(*built);
+    replaceLive(std::move(*built), true);
+}
+
+void Engine::replaceLive(LiveRig&& next, bool sameRig)
+{
+    if (live && beforeNodesReplaced)
+        beforeNodesReplaced(sameRig); // the app closes plugin editors while their instances still exist
+    live = std::move(next);
 }
 
 void Engine::loadInitialRig()

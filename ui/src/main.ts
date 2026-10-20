@@ -1,49 +1,151 @@
-// App shell: header (rig, device status, gear), banners, the current view, toasts.
+// App shell: top bar (library, band / rig name, dirty dot, Save, device status, Stage/Edit, gear), banners, the
+// library panel, the current view, toasts.
 
 import './styles.css';
 import { call } from './bridge';
 import { el, toast } from './dialog';
-import { confirmDiscardIfDirty, dismissStartupError, initStore, onToastableError, store, type AppState, type RigNode } from './state';
+import {
+  confirmDiscardIfDirty,
+  dismissStartupError,
+  initStore,
+  onToastableError,
+  rigSaved,
+  setView,
+  store,
+  type AppState,
+  type RigNode,
+} from './state';
+import { renderEdit } from './views/edit';
+import { onLibraryToggle, renderLibrary, toggleLibrary } from './views/library';
 import { openSettings } from './views/settings';
 
 const app = document.getElementById('app')!;
 
-const rigTitle = el('div', { class: 'rig-title' });
+// ---- top bar ----
+const libraryButton = el('button', { class: 'icon-button', 'aria-label': 'Library', 'aria-expanded': 'false', title: 'Library' }, '☰');
+libraryButton.addEventListener('click', () => toggleLibrary());
+onLibraryToggle((open) => libraryButton.setAttribute('aria-expanded', String(open)));
+
+const bandInput = el('input', { class: 'rig-band-input', type: 'text', 'aria-label': 'Band', placeholder: 'Band', list: 'band-names', spellcheck: 'false' });
+const nameInput = el('input', { class: 'rig-name-input', type: 'text', 'aria-label': 'Rig name', placeholder: 'Rig name', spellcheck: 'false' });
+const bandList = el('datalist', { id: 'band-names' });
+const dirtyDot = el('span', { class: 'dirty', role: 'status' });
+const saveButton = el('button', { class: 'button primary small', title: 'Save (⌘S)' }, 'Save');
 const deviceChip = el('div', { class: 'device-chip' });
+const stageButton = el('button', { class: 'segment', 'aria-pressed': 'false' }, 'Stage');
+const editButton = el('button', { class: 'segment', 'aria-pressed': 'false' }, 'Edit');
+stageButton.addEventListener('click', () => setView('stage'));
+editButton.addEventListener('click', () => setView('edit'));
 const gear = el('button', { class: 'icon-button gear', 'aria-label': 'Settings', title: 'Settings' });
 gear.innerHTML =
   '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.3 7.3 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.3 7.3 0 0 0 1.7 1l.4 2.6h4l.4-2.6a7.3 7.3 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>';
 gear.addEventListener('click', openSettings);
 
 const banners = el('div', { class: 'banners' });
-const view = el('main', { class: 'view' });
+const libraryPanel = el('aside', { class: 'library' });
+const editRoot = el('main', { class: 'view view-edit' });
+const stageRoot = el('main', { class: 'view view-stage' });
 
 app.append(
-  el('header', { class: 'app-header' }, el('div', { class: 'brand' }, 'AMPerator'), rigTitle, el('div', { class: 'spacer' }), deviceChip, gear),
+  el(
+    'header',
+    { class: 'app-header' },
+    el('div', { class: 'brand' }, 'AMPerator'),
+    libraryButton,
+    el('div', { class: 'rig-fields' }, bandInput, el('span', { class: 'rig-sep', 'aria-hidden': 'true' }, '›'), nameInput, dirtyDot, bandList),
+    saveButton,
+    el('div', { class: 'spacer' }),
+    deviceChip,
+    el('div', { class: 'segmented', role: 'group', 'aria-label': 'View' }, stageButton, editButton),
+    gear,
+  ),
   banners,
-  view,
+  el('div', { class: 'workspace' }, libraryPanel, editRoot, stageRoot),
 );
+
+// ---- rig name / band: edited locally, written by Save (saveRig {name, band}) ----
+let draftRigId = '';
+let draftEdited = false;
+
+function syncRigFields(s: AppState) {
+  const rig = s.rig;
+  for (const i of [bandInput, nameInput]) i.disabled = !rig;
+  saveButton.disabled = !rig;
+  if (!rig) {
+    bandInput.value = nameInput.value = '';
+    dirtyDot.textContent = '';
+    return;
+  }
+  if (rig.id !== draftRigId) {
+    draftRigId = rig.id;
+    draftEdited = false;
+  }
+  if (!draftEdited) {
+    bandInput.value = rig.band;
+    nameInput.value = rig.name;
+  }
+  const renamed = draftEdited && (nameInput.value.trim() !== rig.name || bandInput.value.trim() !== rig.band);
+  const unsaved = s.dirty || renamed || !s.saved;
+  dirtyDot.textContent = unsaved ? '●' : '';
+  dirtyDot.title = unsaved ? (s.saved ? 'Unsaved changes' : 'Not saved yet') : '';
+  dirtyDot.setAttribute('aria-label', dirtyDot.title);
+  bandList.replaceChildren(...s.bands.map((b) => el('option', { value: b })));
+}
+
+for (const input of [bandInput, nameInput]) {
+  input.addEventListener('input', () => {
+    draftEdited = true;
+    syncRigFields(store.get());
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') void save();
+    else if (e.key === 'Escape') {
+      draftEdited = false;
+      syncRigFields(store.get());
+      input.blur();
+    }
+  });
+}
+
+async function save() {
+  if (!store.get().rig) return;
+  saveButton.disabled = true;
+  try {
+    const r = await call<{ id: string; name: string; band: string }>('saveRig', { name: nameInput.value, band: bandInput.value });
+    draftEdited = false;
+    rigSaved(r.name, r.band);
+    toast(`Saved “${r.name}”`, 'info');
+  } catch (e) {
+    toast(`Couldn't save: ${(e as Error).message}`);
+  } finally {
+    syncRigFields(store.get());
+  }
+}
+saveButton.addEventListener('click', () => void save());
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    void save();
+  }
+});
 
 let connectionError = '';
 
 function render(s: AppState) {
-  rigTitle.replaceChildren(
-    ...(s.rig
-      ? [
-          el('span', { class: 'band' }, s.rig.band),
-          el('span', { class: 'rig-name' }, s.rig.name),
-          ...(s.dirty ? [el('span', { class: 'dirty', title: 'Unsaved changes' }, '●')] : []),
-        ]
-      : []),
-  );
+  syncRigFields(s);
 
   const d = s.deviceStatus;
   deviceChip.className = `device-chip status-${d.status}`;
   deviceChip.textContent = d.status === 'Running' ? `${d.latencyMs.toFixed(1)} ms` : d.status === 'Disconnected' ? 'Audio disconnected' : 'No audio';
   deviceChip.title = d.status === 'Running' ? 'Round-trip latency' : '';
 
+  stageButton.setAttribute('aria-pressed', String(s.view === 'stage'));
+  editButton.setAttribute('aria-pressed', String(s.view === 'edit'));
+  editRoot.hidden = s.view !== 'edit';
+  stageRoot.hidden = s.view !== 'stage';
+
   renderBanners(s);
-  renderView(s);
+  if (s.view === 'stage') renderStagePlaceholder(s);
 }
 
 function renderBanners(s: AppState) {
@@ -84,17 +186,17 @@ function banner(text: string, onDismiss?: () => void, action?: HTMLElement) {
   return b;
 }
 
-// Placeholder until the stage and edit views exist: the current rig's signal chain.
-function renderView(s: AppState) {
+// Placeholder until the stage view exists (Task 19): the current rig's signal chain.
+function renderStagePlaceholder(s: AppState) {
   if (!s.connected) {
-    view.replaceChildren(el('p', { class: 'muted center' }, connectionError ? '' : 'Connecting to the engine…'));
+    stageRoot.replaceChildren(el('p', { class: 'muted center' }, connectionError ? '' : 'Connecting to the engine…'));
     return;
   }
   if (!s.rig) {
-    view.replaceChildren(el('p', { class: 'muted center' }, 'No rig loaded.'));
+    stageRoot.replaceChildren(el('p', { class: 'muted center' }, 'No rig loaded.'));
     return;
   }
-  view.replaceChildren(
+  stageRoot.replaceChildren(
     el('h1', { class: 'stage-rig-name' }, s.rig.name),
     el(
       'ol',
@@ -114,6 +216,8 @@ function nodeLabel(n: RigNode): string {
   return n.type;
 }
 
+renderEdit(editRoot);
+renderLibrary(libraryPanel);
 store.subscribe(render);
 render(store.get());
 
