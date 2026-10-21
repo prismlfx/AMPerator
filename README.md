@@ -29,7 +29,7 @@ Open source under the AGPLv3. macOS today; the code is cross-platform (JUCE 8) a
 
 ## Status
 
-Sub-project 1 (the core rig engine) is complete: 257 C++ tests and 93 UI tests pass, including an offline audio regression suite. Real-hardware checks are tracked in [docs/manual-test-checklist.md](docs/manual-test-checklist.md). Planned next:
+Sub-project 1 (the core rig engine) is complete: 261 C++ tests and 133 UI tests pass, including an offline audio regression suite. Real-hardware checks are tracked in [docs/manual-test-checklist.md](docs/manual-test-checklist.md). Planned next:
 
 1. **Tone library search** — find and download amp models and IRs from public libraries (TONE3000) inside the app.
 2. **AI tone builder** — "I want to play Interstate Love Song by STP" → the app finds the closest models, builds the chain, and you save it.
@@ -82,6 +82,8 @@ Drop files into `Models/` and `IRs/`, or point Settings → *Watched folders* at
 - **Save** keeps the last 5 versions as `.bak` files beside the rig; **Save as…** makes a copy under a new name.
 - A rig file that gets corrupted shows an error with an **Open last backup** action instead of silently disappearing.
 - Quitting or switching rigs with unsaved changes asks first.
+
+**Tags.** Give a rig as many free-form tags as you like — a style or decade (`clean`, `70s`), and the bands and songs you use it for (`Parkway Drive`, `Wild Eyes`) — so a rig called *Peavey 5150 - Djent* is still easy to find without renaming it. Add them in Edit, in the *Tags* row above the pedalboard (Enter or comma adds one, ✕ removes one, known tags are suggested as you type); they are saved with the rig and shown under its name on the Stage. In the library, the search field matches rig names, bands and tags, and the tag bar below it filters by one or more tags (all must match). `⌘F`, or `/`, jumps to the search.
 
 ### Plugins
 
