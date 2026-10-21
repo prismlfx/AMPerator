@@ -35,7 +35,16 @@ CommandResult Engine::listPlugins()
 {
     juce::Array<juce::var> out;
     for (auto& d : plugins->available())
-        out.add(json::pluginRef(PluginHost::refFor(d)));
+    {
+        // A PluginRef plus what the UI's plugin picker sorts by (still accepted as addNode's `plugin`).
+        auto p = json::pluginRef(PluginHost::refFor(d));
+        auto* o = p.getDynamicObject();
+        o->setProperty("category", d.category);
+        o->setProperty("isInstrument", d.isInstrument);
+        o->setProperty("numInputChannels", d.numInputChannels);
+        o->setProperty("numOutputChannels", d.numOutputChannels);
+        out.add(p);
+    }
     return CommandResult::success(json::object({ { "plugins", out } }));
 }
 

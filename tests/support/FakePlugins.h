@@ -1,8 +1,8 @@
 #pragma once
 
 // Fake in-memory plugins for PluginHost tests: a "Fake" AudioPluginFormat whose scan finds
-// fake://gain (FakeGain), fake://boost (FakeBoost, also a FakeGain), fake://mono, fake://monostereo
-// and fake://sidechain, so no system plugins are touched.
+// fake://gain (FakeGain), fake://boost (FakeBoost, also a FakeGain), fake://mono, fake://monostereo,
+// fake://sidechain and fake://synth (an instrument: no inputs), so no system plugins are touched.
 
 #include <atomic>
 #include <cstring>
@@ -234,6 +234,20 @@ public:
     float sidechainPeak = -1.0f;
 };
 
+// An instrument: no input bus, stereo out, outputs silence. Described as "Instrument|Synth", isInstrument.
+class FakeSynth final : public FakeBase
+{
+public:
+    explicit FakeSynth(juce::PluginDescription d)
+        : FakeBase(BusesProperties().withOutput("Out", juce::AudioChannelSet::stereo()), std::move(d)) {}
+
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override { buffer.clear(); }
+    bool isBusesLayoutSupported(const BusesLayout& l) const override
+    {
+        return l.getMainInputChannelSet().isDisabled() && l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+    }
+};
+
 class FakeFormat final : public juce::AudioPluginFormat
 {
 public:
@@ -252,7 +266,7 @@ public:
     bool isTrivialToScan() const override { return true; }
     juce::StringArray searchPathsForPlugins(const juce::FileSearchPath&, bool, bool) override
     {
-        return { "fake://gain", "fake://boost", "fake://mono", "fake://monostereo", "fake://sidechain" };
+        return { "fake://gain", "fake://boost", "fake://mono", "fake://monostereo", "fake://sidechain", "fake://synth" };
     }
     juce::FileSearchPath getDefaultLocationsToSearch() override { return {}; }
     bool requiresUnblockedMessageThreadDuringCreation(const juce::PluginDescription&) const override { return false; }
@@ -267,6 +281,8 @@ protected:
             cb(std::make_unique<FakeMonoToStereo>(d), {});
         else if (id == "fake://sidechain")
             cb(std::make_unique<FakeSidechain>(d), {});
+        else if (id == "fake://synth")
+            cb(std::make_unique<FakeSynth>(d), {});
         else
             cb(std::make_unique<FakeGain>(d), {});
     }
@@ -278,6 +294,7 @@ private:
         if (id == "fake://mono") return "FakeMono";
         if (id == "fake://monostereo") return "FakeMonoToStereo";
         if (id == "fake://sidechain") return "FakeSidechain";
+        if (id == "fake://synth") return "FakeSynth";
         return "FakeBoost";
     }
 
@@ -293,6 +310,21 @@ private:
         d.uniqueId = id.hashCode();
         d.numInputChannels = 2;
         d.numOutputChannels = 2;
+        if (id == "fake://mono")
+        {
+            d.category = "Fx|Distortion";
+            d.numInputChannels = d.numOutputChannels = 1;
+        }
+        else if (id == "fake://monostereo")
+            d.numInputChannels = 1;
+        else if (id == "fake://sidechain")
+            d.numInputChannels = 4;
+        else if (id == "fake://synth")
+        {
+            d.category = "Instrument|Synth";
+            d.isInstrument = true;
+            d.numInputChannels = 0;
+        }
         return d;
     }
 };

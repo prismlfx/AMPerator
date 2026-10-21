@@ -76,6 +76,14 @@ Placeholder nodes keep all their data but run as bypassed passthroughs; `toggleB
 
 **PluginRef**: `{format, uid, name, vendor}`.
 
+**PluginInfo** (`listPlugins` / `rescanPlugins`): a PluginRef plus what the scan reported, for sorting the plugin
+picker: `{format, uid, name, vendor, category, isInstrument, numInputChannels, numOutputChannels}`. `category` is
+JUCE's `PluginDescription::category` verbatim (VST3: e.g. `"Fx|Distortion"`, `"Instrument|Synth"`; AU: e.g.
+`"Effect"`, `"Synth"`, `"MusicEffect"`, `"Generator"`; may be `""`), `isInstrument` is
+`PluginDescription::isInstrument`, and the channel counts are the totals over all buses the scan saw (an instrument
+typically has 0 inputs; a sidechain bus adds inputs). A PluginInfo is accepted wherever a PluginRef is (the extra
+fields are ignored), and only the PluginRef fields are written to rig files.
+
 **Asset**: `{file: absolute path, name: file name without extension, kind: "nam"|"ir", sha256}`.
 
 **Settings**: `{audioDeviceType, audioDeviceName, inputChannel, outputFirstChannel, sampleRate, bufferSize,
@@ -102,7 +110,7 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `saveRig` | `name?`, `band?`, `asNew?` (bool) | `{id, name, band}` | Captures live params/bypass/plugin state, writes atomically (keeps 5 `.bak`). Becomes the last rig. `rigDirty{false}` (always). A non-blank `name` / `band` (trimmed) renames the rig / moves it to that band's folder first (same id; backups move with it, and the version saved under the old name becomes `.bak.1`); blank or absent keeps the current value. The result carries the saved name and band (no `rigLoaded`). **`asNew: true`** ("Save as…"): writes a copy under a fresh id (file name made unique), leaves the original file untouched, keeps the nodes' user images, and makes the copy the current rig → `rigLoaded` (new `id`, `saved:true`), then `rigDirty{false}`. |
 | `deleteRig` | `id` | `{}` | Moves the file and its backups to the system Trash (`juce::File::moveToTrash`), drops it from favorites/recents. If it was the current rig, the rig now at its list position (else a new default rig) is loaded → `rigLoaded`. |
 | `nextRig` / `prevRig` | — | `{id}` | Walks `listRigs` order with wrap-around. An unsaved current rig counts as "before the first": next → first, prev → last. No saved rigs → `ok:false`. |
-| `addNode` | `type` (`Gate`,`EQ`,`NamAmp`,`CabIR`,`Plugin`), `index` (chain position among non-I/O nodes, clamped), `plugin?` (PluginRef from `listPlugins`, or its `uid`; required for `Plugin`), `asset?` (absolute path from `listAssets`, NamAmp/CabIR only) | `{id}` | Structural edit: rebuild + crossfaded swap. `rigLoaded`, `rigDirty{true}`. |
+| `addNode` | `type` (`Gate`,`EQ`,`NamAmp`,`CabIR`,`Plugin`), `index` (chain position among non-I/O nodes, clamped), `plugin?` (PluginRef or PluginInfo from `listPlugins`, or its `uid`; required for `Plugin`), `asset?` (absolute path from `listAssets`, NamAmp/CabIR only) | `{id}` | Structural edit: rebuild + crossfaded swap. `rigLoaded`, `rigDirty{true}`. |
 | `moveNode` | `id`, `index` | `{}` | Structural. `rigLoaded`, `rigDirty`. |
 | `removeNode` | `id` | `{}` | Structural; also removes the rig's mappings to that node. `rigLoaded`, `rigDirty`. |
 | `setAsset` | `id`, `file` (absolute path from `listAssets`; `""` clears) | `{}` | NamAmp (`.nam`) / CabIR (IR) nodes. File must be in the asset library. Structural. |
@@ -114,11 +122,11 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `assignFootswitchKey` | `{control}` (`footswitch:L`/`M`/`R`) | `{}` | The next HID key pressed becomes that control's key (replacing the control's previous key and taking the key from any other control); that press does not trigger a control. Saved to `settings.footswitchKeys`, applied immediately, `controlStatus` emitted with `assigning:null` and the new `lastKey`. |
 | `cancelAssignFootswitchKey` | — | `{}` | Aborts a pending assign (`controlStatus.assigning` → null). |
 | `listAssets` | `kind` (`"nam"`\|`"ir"`) | `{assets: [Asset]}` | From `Models/`, `IRs/` and watched folders, rescanned on every call (hashes are cached), so files dropped in while the app runs appear at once. `loadRig`, `newRig`, `addNode` with an asset and `setAsset` rescan before resolving too. |
-| `listPlugins` | — | `{plugins: [PluginRef]}` | From the last scan (blacklisted plugins excluded). |
+| `listPlugins` | — | `{plugins: [PluginInfo]}` | From the last scan (blacklisted plugins excluded). |
 | `listBlacklisted` | — | `{plugins: [{id, name}]}` | Plugins disabled because they crashed AMPerator (blacklist ids: a plugin id or a plugin file; `name` is the known plugin name, else the file name, else the id). |
 | `unblacklistPlugin` | `id` | `{plugins: [{id, name}]}` (the remaining list) | Re-enables it. A plugin that crashed while it was being scanned only shows up again after `rescanPlugins`. Unknown id → `ok:false`. |
 | `listHidKeyboards` | — | `{keyboards: [{vid, pid, id: "vvvv:pppp", manufacturer, product}]}` | Connected keyboard-type HID devices (usage page 1, usage 6), one per vendor/product id, for picking an unrecognised footswitch (`setSettings{footswitchDevice}`). Empty when the engine runs without controls. |
-| `rescanPlugins` | — | `{plugins: [PluginRef]}` | **Blocks** the engine/UI thread for the whole scan (in-process scanning); show a busy state, and wait longer than the default 10 s for the reply (`call(cmd, args, timeoutMs)`). Never run automatically at startup. |
+| `rescanPlugins` | — | `{plugins: [PluginInfo]}` | **Blocks** the engine/UI thread for the whole scan (in-process scanning); show a busy state, and wait longer than the default 10 s for the reply (`call(cmd, args, timeoutMs)`). Never run automatically at startup. |
 | `openPluginEditor` | `id` | `{}` | Asks the app to open the plugin's native editor window (one per node; opening it again brings it to the front). `ok:false "not available"` if the node isn't a loaded plugin or the host app has no editor support. Editor windows close whenever the rig's nodes are rebuilt (`Engine::beforeNodesReplaced`: rig load, structural edit, device-rate change); after a rebuild of the same rig the app reopens the editors of nodes that still exist. |
 | `getSettings` | — | Settings (+ available lists) | |
 | `setSettings` | any subset of Settings fields | Settings (+ available lists) | Device fields that actually change reopen the device (plan rebuilt at the new rate/buffer); any device field reopens it also when the device is not running or a fallback runs (a retry, even with unchanged values). The device fields are the user's **preferred** device: when it is missing at open the type's default device runs as a fallback, but Settings keep naming the preferred device (and its channels) — only an open of the preferred device itself (or of a fallback when no device was named) writes the actual rate/buffer/channels back. While a fallback runs the engine watches hot-plug changes and switches to the preferred device, with its saved channels, as soon as it is listed again; `watchedFolders` (absolute paths) rescans assets; `globalMappings` (`action` defaults to `toggleBypass`); `footswitchKeys` (keycode `"0x04"`/`"4"` → control). Saved to `settings.json`. A device that fails to open → `ok:false` with the driver's message (other fields still applied). |

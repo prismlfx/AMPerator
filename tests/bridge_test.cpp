@@ -255,6 +255,55 @@ TEST_CASE("bridge: addNode emits rigLoaded with node in order")
           == juce::StringArray { "Input", "Gate", "NamAmp", "CabIR", "Plugin", "Output" });
 }
 
+TEST_CASE("bridge: listPlugins and rescanPlugins report category, instrument flag and channel counts")
+{
+    Fixture f;
+    const auto byName = [](const juce::var& list, const juce::String& name)
+    {
+        for (auto& p : *list.getArray())
+            if (p["name"].toString() == name)
+                return p;
+        return juce::var();
+    };
+    const auto rescanned = f.ok("rescanPlugins")["plugins"];
+    const auto listed = f.ok("listPlugins")["plugins"];
+    for (const auto& list : { rescanned, listed })
+    {
+        const auto gain = byName(list, "FakeGain");
+        REQUIRE(gain.isObject());
+        CHECK(gain["format"].toString() == "Fake");
+        CHECK(gain["vendor"].toString() == "Test Vendor");
+        CHECK(gain["uid"].toString().isNotEmpty());
+        CHECK(gain["category"].toString() == "Effect"); // PluginDescription::category, verbatim
+        CHECK(gain["isInstrument"].isBool());
+        CHECK_FALSE(static_cast<bool>(gain["isInstrument"]));
+        CHECK(static_cast<int>(gain["numInputChannels"]) == 2);
+        CHECK(static_cast<int>(gain["numOutputChannels"]) == 2);
+
+        const auto mono = byName(list, "FakeMono");
+        REQUIRE(mono.isObject());
+        CHECK(mono["category"].toString() == "Fx|Distortion");
+        CHECK(static_cast<int>(mono["numInputChannels"]) == 1);
+        CHECK(static_cast<int>(mono["numOutputChannels"]) == 1);
+
+        const auto sidechain = byName(list, "FakeSidechain");
+        REQUIRE(sidechain.isObject());
+        CHECK(static_cast<int>(sidechain["numInputChannels"]) == 4); // main + sidechain bus
+        CHECK(static_cast<int>(sidechain["numOutputChannels"]) == 2);
+
+        const auto synth = byName(list, "FakeSynth");
+        REQUIRE(synth.isObject());
+        CHECK(synth["category"].toString() == "Instrument|Synth");
+        CHECK(static_cast<bool>(synth["isInstrument"]));
+        CHECK(static_cast<int>(synth["numInputChannels"]) == 0);
+        CHECK(static_cast<int>(synth["numOutputChannels"]) == 2);
+    }
+
+    // The richer object is still accepted as addNode's plugin reference.
+    f.ok("addNode", obj({ { "type", "Plugin" }, { "index", 0 }, { "plugin", byName(listed, "FakeMono") } }));
+    CHECK(f.lastEvent("rigLoaded")["report"]["placeholderNodeIds"].getArray()->isEmpty());
+}
+
 TEST_CASE("bridge: toggleBypass emits bypassChanged")
 {
     Fixture f;
