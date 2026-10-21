@@ -200,6 +200,28 @@ describe('library search and tag filter bar', () => {
     expect(bandGroups()).toHaveLength(2);
   });
 
+  it('a stale listRigs / listTags reply never overwrites a newer one', async () => {
+    await rendered();
+    state.rigSaved('Black Dog', 'Zeppelin'); // refresh #2
+    await flush();
+    const rigs2 = pending('listRigs');
+    const tags2 = pending('listTags');
+    juce.fromBackend('amp', { v: 1, event: 'tagsChanged', data: { tags: ['blues'] } }); // refresh #3
+    await flush();
+    const rigs3 = pending('listRigs');
+    const tags3 = pending('listTags');
+    expect(rigs3.id).not.toBe(rigs2.id);
+
+    juce.reply(rigs3.id, true, { rigs: RIGS.filter((r) => r.id === 'plush'), bands: [] });
+    juce.reply(tags3.id, true, { tags: [{ tag: 'new', count: 1 }] });
+    await flush();
+    juce.reply(rigs2.id, true, { rigs: RIGS, bands: [] }); // older answers arrive last
+    juce.reply(tags2.id, true, { tags: TAGS });
+    await flush();
+    expect(bandGroups()).toEqual([['STP', 'Plush']]);
+    expect(chips().map((c) => c.textContent)).toEqual(['new1']);
+  });
+
   it('works with rigs listed without tags', async () => {
     await rendered(
       RIGS.map(({ tags: _tags, ...r }) => r) as any,

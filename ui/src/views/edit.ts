@@ -134,12 +134,16 @@ export function renderEdit(root: HTMLElement): void {
 
   /** Every add / remove sends the complete list; the engine answers with tagsChanged (the normalized list). */
   async function saveTags(tags: string[]) {
+    const before = store.get().rig?.tags ?? [];
+    const added = tags.filter((t) => !before.some((b) => b.toLowerCase() === t.toLowerCase()));
     try {
       await call('setTags', { tags });
     } catch (e) {
       showError(e);
       tagsKey = ''; // show the rig's tags again
       renderTags(store.get());
+      // What was just typed goes back into the input to be fixed (unless something new was typed meanwhile).
+      if (added.length > 0 && tagEditor.input.value === '') tagEditor.input.value = added.join(', ');
     }
   }
 

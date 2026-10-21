@@ -211,20 +211,30 @@ export function renderLibrary(root: HTMLElement): void {
     }
   }
 
+  // Each refresh numbers its request: a reply to an older one (answered late) never overwrites a newer result.
+  let rigsRequest = 0;
+  let tagsRequest = 0;
+
   async function refreshRigs() {
     void refreshTags(); // answered on its own: the list never waits for the tags
+    const request = ++rigsRequest;
     try {
       const r = await call<{ rigs: RigEntry[]; bands: string[] }>('listRigs');
+      if (request !== rigsRequest) return;
       rigs = r.rigs;
     } catch (e) {
+      if (request !== rigsRequest) return;
       toast(`Couldn't list rigs: ${(e as Error).message}`);
     }
     if (tab === 'rigs') renderRigs();
   }
 
   async function refreshTags() {
+    const request = ++tagsRequest;
     try {
-      tagCounts = (await call<{ tags: TagCount[] }>('listTags')).tags;
+      const r = await call<{ tags: TagCount[] }>('listTags');
+      if (request !== tagsRequest) return;
+      tagCounts = r.tags;
     } catch {
       return; // the bar keeps the last known tags
     }

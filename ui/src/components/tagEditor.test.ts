@@ -9,8 +9,9 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 const chips = () => [...editor.el.querySelectorAll('.tag-chip .tag-text')].map((c) => c.textContent);
 const suggestions = () => [...document.querySelectorAll('.tag-suggestion')].map((s) => s.textContent);
 const active = () => document.querySelector('.tag-suggestion[aria-selected="true"]')?.textContent;
-const key = (k: string) =>
-  editor.input.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+const key = (k: string, init: KeyboardEventInit = {}) =>
+  editor.input.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init }));
+const toasts = () => [...document.querySelectorAll('.toast')].map((t) => t.textContent);
 function type(text: string) {
   editor.input.value = text;
   editor.input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -135,6 +136,72 @@ describe('tag editor', () => {
     type('7');
     document.querySelector<HTMLElement>('.tag-suggestion')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
     expect(onChange).toHaveBeenLastCalledWith(['70s']);
+  });
+
+  it('does not cap the input length, so long pasted comma lists arrive whole', () => {
+    mount([]);
+    expect(editor.input.hasAttribute('maxlength')).toBe(false);
+    const list = ['Parkway Drive', 'Wild Eyes', 'Bottom Feeder', 'Carrion', 'Idols and Anchors'];
+    type(`${list.join(', ')},`);
+    expect(onChange).toHaveBeenLastCalledWith(list);
+  });
+
+  it('a tag longer than 40 characters is refused: the text stays in the input and a toast says why', () => {
+    mount(['clean']);
+    const long = 'x'.repeat(41);
+    type(long);
+    key('Enter');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(editor.input.value).toBe(long);
+    expect(toasts().at(-1)).toContain('40 characters');
+
+    type('y'.repeat(40)); // the limit itself is fine
+    key('Enter');
+    expect(onChange).toHaveBeenLastCalledWith(['clean', 'y'.repeat(40)]);
+  });
+
+  it('a pasted list adds the valid tags and keeps the too-long one in the input', () => {
+    mount([]);
+    const long = 'z'.repeat(45);
+    type(`metal, ${long}, 70s, dje`);
+    expect(onChange).toHaveBeenLastCalledWith(['metal', '70s']);
+    expect(editor.input.value).toBe(`${long}, dje`);
+    expect(toasts()).toHaveLength(1);
+    type(`${long}, djen`); // still being edited: no new toast for the same text
+    expect(toasts()).toHaveLength(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('Enter during IME composition does not add a tag', () => {
+    mount([]);
+    type('にほん');
+    key('Enter', { isComposing: true });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(editor.input.value).toBe('にほん');
+    key('Enter');
+    expect(onChange).toHaveBeenLastCalledWith(['にほん']);
+  });
+
+  it('leaving the field adds the typed text as a tag; Escape discards it instead', () => {
+    mount(['clean']);
+    editor.input.focus();
+    type(' live ');
+    editor.input.blur();
+    expect(onChange).toHaveBeenLastCalledWith(['clean', 'live']);
+    expect(editor.input.value).toBe('');
+
+    editor.input.focus();
+    type('oops');
+    key('Escape');
+    expect(document.activeElement).not.toBe(editor.input);
+    expect(editor.input.value).toBe('');
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    editor.input.focus();
+    type('w'.repeat(41)); // too long: kept for fixing, not added
+    editor.input.blur();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(editor.input.value).toBe('w'.repeat(41));
   });
 
   it('setTags shows the given list without reporting a change and keeps the typed text', () => {

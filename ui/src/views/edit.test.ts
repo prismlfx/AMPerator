@@ -348,14 +348,16 @@ describe('rig tags', () => {
     expect(lastCommand()).toMatchObject({ cmd: 'setTags', args: { tags: ['Parkway Drive'] } });
   });
 
-  it('a rejected setTags shows why and puts the rig tags back', async () => {
+  it('a rejected setTags shows why, puts the rig tags back and the typed text back in the input', async () => {
     await started(makeRig({ tags: ['70s'] }));
     edit.renderEdit(root);
-    addTag('x'.repeat(10));
-    expect(chips()).toEqual(['70s', 'x'.repeat(10)]);
-    juce.reply(lastCommand().id, false, 'too many tags');
+    addTag('Wild Eyes');
+    expect(chips()).toEqual(['70s', 'Wild Eyes']);
+    expect(tagInput().value).toBe('');
+    juce.reply(lastCommand().id, false, 'too many tags: 33 (at most 32)');
     await flush();
     expect(chips()).toEqual(['70s']);
+    expect(tagInput().value).toBe('Wild Eyes');
     expect(document.querySelector('.toast')!.textContent).toContain('too many tags');
   });
 

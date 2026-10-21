@@ -29,7 +29,7 @@ Open source under the AGPLv3. macOS today; the code is cross-platform (JUCE 8) a
 
 ## Status
 
-Sub-project 1 (the core rig engine) is complete: 261 C++ tests and 133 UI tests pass, including an offline audio regression suite. Real-hardware checks are tracked in [docs/manual-test-checklist.md](docs/manual-test-checklist.md). Planned next:
+Sub-project 1 (the core rig engine) is complete: 261 C++ tests and 139 UI tests pass, including an offline audio regression suite. Real-hardware checks are tracked in [docs/manual-test-checklist.md](docs/manual-test-checklist.md). Planned next:
 
 1. **Tone library search** — find and download amp models and IRs from public libraries (TONE3000) inside the app.
 2. **AI tone builder** — "I want to play Interstate Love Song by STP" → the app finds the closest models, builds the chain, and you save it.

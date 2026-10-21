@@ -1,8 +1,9 @@
-// Tag editor: the rig's tags as chips (✕ removes one) and an input that adds one on Enter or comma; Backspace on
-// the empty input removes the last chip, Escape leaves the field. Known tags whose start matches the typed text are
-// offered in a dropdown (↑ / ↓ to pick, Enter or click to add). Every change reports the complete list.
+// Tag editor: the rig's tags as chips (✕ removes one) and an input that adds one on Enter, comma or leaving the
+// field; Backspace on the empty input removes the last chip, Escape discards the typed text and leaves the field.
+// Known tags whose start matches the typed text are offered in a dropdown (↑ / ↓ to pick, Enter or click to add).
+// A tag longer than MAX_TAG_LENGTH stays in the input with a toast saying why. Every change reports the complete list.
 
-import { el } from '../dialog';
+import { el, toast } from '../dialog';
 
 export const MAX_TAG_LENGTH = 40; // Engine::maxTagLength
 const MAX_SUGGESTIONS = 8;
@@ -32,14 +33,15 @@ export function createTagEditor(opts: TagEditorOptions): TagEditor {
   let shown: string[] = []; // suggestions in the dropdown
   let activeIndex = -1;
   let fetchId = 0;
+  let disposed = false;
+  let lastRefused = ''; // the too-long text last toasted (no repeat toast while it is being edited)
 
   const label = opts.label ?? 'Tags';
   const input = el('input', {
     class: 'tag-input',
     type: 'text',
     placeholder: 'Add tag…',
-    'aria-label': `Add tag`,
-    maxlength: String(MAX_TAG_LENGTH),
+    'aria-label': `Add tag`, // no maxlength: it would cut pasted comma lists; addTags checks each tag
     spellcheck: 'false',
     autocomplete: 'off',
     role: 'combobox',
@@ -67,14 +69,33 @@ export function createTagEditor(opts: TagEditorOptions): TagEditor {
     opts.onChange([...tags]);
   }
 
-  /** Adds each non-blank tag that is not there yet; one report for all of them. */
-  function addTags(candidates: string[]) {
+  /** Adds each non-blank tag that is not there yet (one report for all of them) and returns the ones refused for
+      being longer than MAX_TAG_LENGTH, after a toast unless `quietIfSame` and the same text was toasted last. */
+  function addTags(candidates: string[], quietIfSame = false): string[] {
     const next = [...tags];
+    const refused: string[] = [];
     for (const raw of candidates) {
       const t = raw.trim();
-      if (t && !next.some((x) => same(x, t))) next.push(t);
+      if (t.length > MAX_TAG_LENGTH) refused.push(t);
+      else if (t && !next.some((x) => same(x, t))) next.push(t);
     }
     if (next.length !== tags.length) commit(next);
+    const refusedKey = refused.join('\n');
+    if (refused.length > 0 && !(quietIfSame && refusedKey === lastRefused)) {
+      const shown = refused[0].length > 24 ? `${refused[0].slice(0, 24)}…` : refused[0];
+      toast(`A tag can have at most ${MAX_TAG_LENGTH} characters: “${shown}” is ${refused[0].length}.`);
+    }
+    lastRefused = refusedKey;
+    return refused;
+  }
+
+  /** Adds the input's text as a tag; a refused (too long) text stays in the input. */
+  function commitInput() {
+    const text = input.value;
+    input.value = '';
+    closeList();
+    const refused = addTags([text]);
+    if (refused.length > 0) input.value = text.trim();
   }
 
   function removeTag(t: string) {
@@ -132,13 +153,18 @@ export function createTagEditor(opts: TagEditorOptions): TagEditor {
       // suggestions are a convenience: typing still works without them
     }
   });
-  input.addEventListener('blur', closeList);
+  input.addEventListener('blur', () => {
+    closeList();
+    if (!disposed && input.value.trim()) commitInput(); // typed text is not lost by clicking elsewhere
+  });
 
   input.addEventListener('input', () => {
     if (input.value.includes(',')) {
       const parts = input.value.split(',');
-      input.value = parts.pop() ?? '';
-      addTags(parts);
+      const rest = parts.pop() ?? '';
+      const refused = addTags(parts, true);
+      // Refused parts stay in the input to be fixed, ahead of the part still being typed.
+      input.value = refused.length > 0 ? [...refused, ...(rest.trim() ? [rest.trim()] : [])].join(', ') : rest;
     }
     activeIndex = -1;
     renderList();
@@ -148,12 +174,10 @@ export function createTagEditor(opts: TagEditorOptions): TagEditor {
     switch (e.key) {
       case 'Enter':
       case ',': {
+        if (e.isComposing) return; // Enter confirms an IME composition, not the tag
         e.preventDefault();
         if (e.key === 'Enter' && activeIndex >= 0 && shown[activeIndex]) return pick(shown[activeIndex]);
-        const text = input.value;
-        input.value = '';
-        closeList();
-        addTags([text]);
+        commitInput();
         return;
       }
       case 'Backspace':
@@ -173,6 +197,7 @@ export function createTagEditor(opts: TagEditorOptions): TagEditor {
       case 'Escape':
         e.preventDefault();
         e.stopPropagation(); // leaving the field is all Escape does here
+        input.value = ''; // discarded, so leaving the field adds nothing
         closeList();
         input.blur();
         return;
@@ -190,6 +215,7 @@ export function createTagEditor(opts: TagEditorOptions): TagEditor {
       if (!list.hidden) renderList();
     },
     dispose() {
+      disposed = true;
       fetchId++;
       root.remove();
     },
