@@ -3,10 +3,17 @@
 // Fake in-memory plugins for PluginHost tests: a "Fake" AudioPluginFormat whose scan finds
 // fake://gain (FakeGain), fake://boost (FakeBoost, also a FakeGain), fake://mono, fake://monostereo,
 // fake://sidechain and fake://synth (an instrument: no inputs), so no system plugins are touched.
+// Extra ids given to the format are scanned too; three of them misbehave like real plugins do when
+// loaded, for the out-of-process scanner tests: fake://crash aborts the process, fake://crash-once aborts
+// the first process that scans it (the file named by $AMP_FAKE_CRASH_ONCE records that it did) and loads in
+// the next, fake://hang never returns.
 
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <thread>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -251,12 +258,28 @@ public:
 class FakeFormat final : public juce::AudioPluginFormat
 {
 public:
+    explicit FakeFormat(juce::StringArray extraIds = {}) : extra(std::move(extraIds)) {}
+
     juce::String getName() const override { return "Fake"; }
 
     void findAllTypesForFile(juce::OwnedArray<juce::PluginDescription>& results, const juce::String& id) override
     {
-        if (fileMightContainThisPluginType(id))
-            results.add(new juce::PluginDescription(describe(id)));
+        if (! fileMightContainThisPluginType(id))
+            return;
+        if (id == "fake://crash")
+            std::abort();
+        if (id == "fake://crash-once")
+        {
+            const juce::File marker(juce::SystemStats::getEnvironmentVariable("AMP_FAKE_CRASH_ONCE", {}));
+            if (marker != juce::File() && ! marker.exists())
+            {
+                marker.replaceWithText("crashed");
+                std::abort();
+            }
+        }
+        if (id == "fake://hang")
+            std::this_thread::sleep_for(std::chrono::minutes(10));
+        results.add(new juce::PluginDescription(describe(id)));
     }
     bool fileMightContainThisPluginType(const juce::String& id) override { return id.startsWith("fake://"); }
     juce::String getNameOfPluginFromIdentifier(const juce::String& id) override { return nameFor(id); }
@@ -266,7 +289,10 @@ public:
     bool isTrivialToScan() const override { return true; }
     juce::StringArray searchPathsForPlugins(const juce::FileSearchPath&, bool, bool) override
     {
-        return { "fake://gain", "fake://boost", "fake://mono", "fake://monostereo", "fake://sidechain", "fake://synth" };
+        juce::StringArray ids { "fake://gain", "fake://boost", "fake://mono", "fake://monostereo", "fake://sidechain",
+                                "fake://synth" };
+        ids.addArray(extra);
+        return ids;
     }
     juce::FileSearchPath getDefaultLocationsToSearch() override { return {}; }
     bool requiresUnblockedMessageThreadDuringCreation(const juce::PluginDescription&) const override { return false; }
@@ -295,8 +321,15 @@ private:
         if (id == "fake://monostereo") return "FakeMonoToStereo";
         if (id == "fake://sidechain") return "FakeSidechain";
         if (id == "fake://synth") return "FakeSynth";
+        if (id.startsWith("fake://") && id != "fake://boost")
+        {
+            const auto rest = id.fromFirstOccurrenceOf("fake://", false, false);
+            return "Fake" + rest.substring(0, 1).toUpperCase() + rest.substring(1); // FakeCrash, FakeCrash-once, FakeHang
+        }
         return "FakeBoost";
     }
+
+    juce::StringArray extra;
 
     static juce::PluginDescription describe(const juce::String& id)
     {
@@ -329,6 +362,6 @@ private:
     }
 };
 
-// A PluginHost over FakeFormat only (no default formats), with its data files in dataDir.
-std::unique_ptr<amp::PluginHost> makeFakePluginHost(const juce::File& dataDir);
+// A PluginHost over FakeFormat only (no default formats), with its data files in dataDir. extraIds are scanned too.
+std::unique_ptr<amp::PluginHost> makeFakePluginHost(const juce::File& dataDir, juce::StringArray extraIds = {});
 } // namespace amp_test

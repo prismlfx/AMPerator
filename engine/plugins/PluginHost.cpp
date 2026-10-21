@@ -209,54 +209,207 @@ PluginHost::PluginHost(juce::File dir, std::vector<std::unique_ptr<juce::AudioPl
     blacklist.removeDuplicates(false);
 }
 
-PluginHost::~PluginHost() = default;
-
-void PluginHost::scan(std::function<void(float)> progress)
+// Everything one scan needs, so the scanning thread never touches the host: the per-format file lists, the
+// list it adds to (seeded from `known`, so unchanged plugins are skipped), and the out-of-process scanner.
+struct PluginHost::ScanJob
 {
-    // Absorb a pedal left by a crashed scan first, so the scanner neither reorders nor re-blacklists.
+    struct Work
+    {
+        juce::AudioPluginFormat* format;
+        juce::StringArray files;
+    };
+    std::vector<Work> work;
+    juce::KnownPluginList found;
+    OutOfProcessScanner* outOfProcess = nullptr; // owned by `found`; null = in-process
+    juce::File crashMarker, pedal;               // in-process only
+    ScanProgress progress;                       // called from runScan on its thread
+    ScanDone done;
+    juce::String error;
+};
+
+class PluginHost::ScanThread final : public juce::Thread
+{
+public:
+    ScanThread(PluginHost& h, std::shared_ptr<ScanJob> j) : Thread("Plugin scan"), host(h), job(std::move(j)) {}
+    ~ScanThread() override { stopThread(-1); }
+
+    void run() override
+    {
+        host.runScan(*job, [this] { return threadShouldExit(); });
+        // The host may be gone by the time this runs: the job expires with it.
+        juce::MessageManager::callAsync([h = &host, weak = std::weak_ptr<ScanJob>(job)]
+        {
+            if (auto j = weak.lock())
+                h->scanThreadFinished();
+        });
+    }
+
+private:
+    PluginHost& host;
+    std::shared_ptr<ScanJob> job;
+};
+
+PluginHost::~PluginHost()
+{
+    scanThread.reset(); // joins; the scanner's worker is killed with the job
+    activeJob.reset();
+}
+
+void PluginHost::setScanWorker(ScanWorker w) { scanWorker = std::move(w); }
+
+bool PluginHost::isScanning() const { return activeJob != nullptr; }
+
+std::shared_ptr<PluginHost::ScanJob> PluginHost::prepareScan()
+{
+    auto job = std::make_shared<ScanJob>();
+    const bool inProcess = scanWorker.executable == juce::File();
+    job->crashMarker = dataDir.getChildFile(kCrashMarkerFile);
+    if (inProcess)
+        job->pedal = dataDir.getChildFile(kDeadMansPedalFile);
+
+    // Absorb a pedal left by a crashed in-process scan first, so the scanner neither reorders nor re-blacklists.
     for (const auto& id : readIds(dataDir.getChildFile(kDeadMansPedalFile)))
         addToBlacklist(id);
     dataDir.getChildFile(kDeadMansPedalFile).deleteFile();
 
-    known.clearBlacklistedFiles();
-    for (const auto& id : blacklist)
-        known.addToBlacklist(id);
+    // Seeded with what is known (unchanged plugins are then skipped) but without the blacklist: blacklisted files
+    // are left out of the file lists below, and the only ids the scan adds to its own blacklist are the ones it
+    // found crashing -- so a Retry (unblacklist) made while the scan runs survives finishScan.
+    if (auto xml = known.createXml())
+        job->found.recreateFromXml(*xml);
+    job->found.clearBlacklistedFiles();
+    if (! inProcess)
+    {
+        auto scanner = std::make_unique<OutOfProcessScanner>(scanWorker);
+        job->outOfProcess = scanner.get();
+        job->found.setCustomScanner(std::move(scanner));
+    }
 
-    const auto crashMarker = dataDir.getChildFile(kCrashMarkerFile);
-    const int numFormats = formats.getNumFormats();
-    for (int fi = 0; fi < numFormats; ++fi)
+    for (int fi = 0; fi < formats.getNumFormats(); ++fi)
     {
         auto* format = formats.getFormat(fi);
         if (! format->canScanForPlugins())
             continue;
-
-        juce::StringArray files;
+        ScanJob::Work w { format, {} };
         for (const auto& f : format->searchPathsForPlugins(format->getDefaultLocationsToSearch(), true, false))
             if (! blacklist.contains(f))
-                files.add(f);
+                w.files.add(f);
+        job->work.push_back(std::move(w));
+    }
+    return job;
+}
 
-        juce::PluginDirectoryScanner scanner(known, *format, {}, true, dataDir.getChildFile(kDeadMansPedalFile),
-                                             false);
-        scanner.setFilesOrIdentifiersToScan(files);
+// The formats are shared with the message thread (create() may run meanwhile): the scanner only calls their
+// stateless queries (searchPathsForPlugins, getNameOfPluginFromIdentifier, pluginNeedsRescanning,
+// doesPluginStillExist), and ~PluginHost joins this thread before `formats` goes away.
+void PluginHost::runScan(ScanJob& job, const std::function<bool()>& shouldExit)
+{
+    const auto numFormats = (float) juce::jmax<size_t>(1, job.work.size());
+    if (job.outOfProcess != nullptr)
+        job.outOfProcess->setShouldExit(shouldExit);
+    for (size_t fi = 0; fi < job.work.size(); ++fi)
+    {
+        auto& w = job.work[fi];
+        juce::PluginDirectoryScanner scanner(job.found, *w.format, {}, true, job.pedal, false);
+        scanner.setFilesOrIdentifiersToScan(w.files);
 
         // The scanner walks its list from the back.
-        for (int i = files.size(); --i >= 0;)
+        for (int i = w.files.size(); --i >= 0;)
         {
+            if (shouldExit())
+                return;
             juce::String name;
+            if (job.outOfProcess != nullptr)
+                scanner.scanNextFile(true, name);
+            else
             {
-                const ScopedCrashMarker guard(crashMarker, files[i]);
+                const ScopedCrashMarker guard(job.crashMarker, w.files[i]);
                 scanner.scanNextFile(true, name);
             }
-            if (progress)
-                progress(((float) fi + scanner.getProgress()) / (float) numFormats);
+            if (job.progress)
+            {
+                // VST3 reports the bundle path as the name; AU reports the plugin name.
+                if (juce::File::isAbsolutePath(name))
+                    name = juce::File(name).getFileNameWithoutExtension();
+                job.progress(((float) fi + scanner.getProgress()) / numFormats, name);
+            }
         }
     }
+    if (job.outOfProcess != nullptr)
+        job.outOfProcess->stopWorker();
+    if (shouldExit())
+        return;
 
-    for (const auto& id : known.getBlacklistedFiles())
+    // Plugins that were uninstalled since the last scan.
+    for (const auto& d : job.found.getTypes())
+        for (const auto& w : job.work)
+            if (w.format->getName() == d.pluginFormatName && ! w.format->doesPluginStillExist(d))
+                job.found.removeType(d);
+
+    if (job.outOfProcess != nullptr)
+        job.error = job.outOfProcess->launchError();
+    if (job.progress)
+        job.progress(1.0f, {});
+}
+
+void PluginHost::finishScan(ScanJob& job)
+{
+    known.clear();
+    for (const auto& d : job.found.getTypes())
+        known.addType(d);
+    for (const auto& id : job.found.getBlacklistedFiles()) // only what this scan found crashing
         addToBlacklist(id);
+    known.clearBlacklistedFiles();
+    for (const auto& id : blacklist)
+        known.addToBlacklist(id);
     saveKnownList();
+}
+
+juce::String PluginHost::scan(std::function<void(float)> progress)
+{
+    if (isScanning())
+        return "a plugin scan is already running";
+    auto job = prepareScan();
     if (progress)
-        progress(1.0f);
+        job->progress = [&progress](float p, const juce::String&) { progress(p); };
+    runScan(*job, [] { return false; });
+    finishScan(*job);
+    return job->error;
+}
+
+bool PluginHost::startScan(ScanProgress progress, ScanDone done)
+{
+    if (isScanning())
+        return false;
+    activeJob = prepareScan();
+    activeJob->done = std::move(done);
+    if (progress)
+    {
+        // From the scan thread to the message thread; dropped once the job is over (host destroyed).
+        activeJob->progress = [report = std::move(progress), weak = std::weak_ptr<ScanJob>(activeJob)]
+            (float p, const juce::String& name)
+        {
+            juce::MessageManager::callAsync([report, weak, p, name]
+            {
+                if (auto j = weak.lock())
+                    report(p, name);
+            });
+        };
+    }
+    scanThread = std::make_unique<ScanThread>(*this, activeJob);
+    scanThread->startThread();
+    return true;
+}
+
+void PluginHost::scanThreadFinished()
+{
+    auto job = std::move(activeJob);
+    scanThread.reset(); // run() has returned; joins
+    if (job == nullptr)
+        return;
+    finishScan(*job);
+    if (job->done)
+        job->done(job->error);
 }
 
 juce::StringArray PluginHost::checkCrashMarkerOnStartup()

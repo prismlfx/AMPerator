@@ -9,6 +9,7 @@
 
 #include "dsp/Node.h"
 #include "model/RigDocument.h"
+#include "plugins/PluginScanner.h"
 
 namespace amp
 {
@@ -64,14 +65,17 @@ private:
     juce::MidiBuffer midi;
 };
 
-// Scans and instantiates VST3/AU plugins (in-process). Files in dataDir:
-//   known-plugins.xml  scan results (KnownPluginList XML), loaded on construction, saved after scan()
+// Scans and instantiates VST3/AU plugins. Files in dataDir:
+//   known-plugins.xml  scan results (KnownPluginList XML), loaded on construction, saved after a scan
 //   blacklist.txt      one id per line: a PluginRef uid (PluginDescription::createIdentifierString) or a
 //                      plugin file/identifier that crashed a scan
-//   crash-marker       id of the plugin inside a risky call (scan of one file, instantiation, first
-//                      prepareToPlay); left behind only if that call took the process down
-//   scan-in-progress   JUCE's PluginDirectoryScanner dead-man's pedal (same purpose, JUCE's mechanism)
-// All methods: message thread. scan() and create() block.
+//   crash-marker       id of the plugin inside a risky call (instantiation, first prepareToPlay, and the scan of
+//                      one file when scanning in-process); left behind only if that call took the process down
+//   scan-in-progress   JUCE's PluginDirectoryScanner dead-man's pedal (in-process scans only; same purpose)
+// Scanning loads every plugin once, which is where plugins crash: with setScanWorker() that happens in a worker
+// process (PluginScanner.h) and the crash marker is not needed; without it (tests, no worker executable) the scan
+// runs in-process under the crash marker. Instantiation (create) is always in-process, under the marker.
+// All methods: message thread. scan() and create() block; startScan() does not.
 class PluginHost
 {
 public:
@@ -80,10 +84,21 @@ public:
     explicit PluginHost(juce::File dataDir,
                         std::vector<std::unique_ptr<juce::AudioPluginFormat>> extraFormats = {},
                         bool addDefaultFormats = true);
-    ~PluginHost();
+    ~PluginHost(); // cancels a running startScan() (its done callback is never called) and kills its worker
 
-    // Scans every format's default locations, skipping blacklisted files. progress gets [0, 1], ending at 1.
-    void scan(std::function<void(float)> progress);
+    // From now on scans load plugins in worker.executable relaunched in scanner mode (OutOfProcessScanner).
+    void setScanWorker(ScanWorker);
+
+    // Scans every format's default locations, skipping blacklisted files, on the calling thread. progress gets
+    // [0, 1], ending at 1. Plugins already known and unchanged are not reloaded. Returns an error message if the
+    // scan could not run at all (the worker failed to launch, a scan is already running), else empty.
+    juce::String scan(std::function<void(float)> progress);
+    using ScanProgress = std::function<void(float, const juce::String& pluginName)>;
+    using ScanDone = std::function<void(const juce::String& error)>; // error as scan() returns it
+    // The same scan on a background thread; progress and done are called on the message thread (its loop must
+    // run). Returns false, doing nothing, while a scan is already running.
+    bool startScan(ScanProgress, ScanDone);
+    bool isScanning() const;
     // Call once at launch, before scan()/create(): a leftover crash marker or dead-man's pedal entry
     // means that plugin took the app down last time; its id goes into blacklist.txt and the files are removed.
     // Returns the ids it blacklisted now (empty when the last run ended cleanly).
@@ -108,6 +123,13 @@ public:
     static juce::File snapshotFile(const juce::File& cacheDir, const juce::String& uid);
 
 private:
+    struct ScanJob;
+    class ScanThread;
+    std::shared_ptr<ScanJob> prepareScan(); // message thread: what the scan reads, copied out of this object
+    void runScan(ScanJob&, const std::function<bool()>& shouldExit); // any thread; touches only the job
+    void finishScan(ScanJob&); // message thread: results into known/blacklist, files saved
+    void scanThreadFinished();
+
     bool isBlacklisted(const juce::PluginDescription&) const;
     void addToBlacklist(const juce::String& id);
     void saveBlacklist() const;
@@ -117,5 +139,8 @@ private:
     juce::AudioPluginFormatManager formats;
     juce::KnownPluginList known;
     juce::StringArray blacklist;
+    ScanWorker scanWorker;
+    std::shared_ptr<ScanJob> activeJob; // non-null while startScan() runs
+    std::unique_ptr<ScanThread> scanThread;
 };
 } // namespace amp

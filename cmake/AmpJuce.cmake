@@ -22,7 +22,8 @@ target_compile_definitions(amp_juce PRIVATE
   JUCE_USE_CURL=0
   JUCE_VST3_CAN_REPLACE_VST2=0
   JUCE_PLUGINHOST_VST3=1
-  JUCE_PLUGINHOST_AU=1)
+  JUCE_PLUGINHOST_AU=1
+  JUCE_MODAL_LOOPS_PERMITTED=1) # MessageManager::runDispatchLoopUntil: tests pump the loop for async scans
 target_include_directories(amp_juce INTERFACE $<TARGET_PROPERTY:amp_juce,INCLUDE_DIRECTORIES>)
 target_compile_definitions(amp_juce INTERFACE $<TARGET_PROPERTY:amp_juce,COMPILE_DEFINITIONS>)
 target_compile_features(amp_juce PUBLIC cxx_std_20)

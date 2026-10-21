@@ -4,6 +4,9 @@
 #include <optional>
 #include <thread>
 #include <type_traits>
+#include <vector>
+
+#include <stdlib.h> // setenv
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>
@@ -434,4 +437,169 @@ TEST_CASE("plugin_host: a parameter change notified from another thread is alloc
     param->setValueNotifyingHost(0.3f);
     node.dispatchPendingEdit();
     CHECK(edits == 1); // not listening any more
+}
+
+//==============================================================================
+// Out-of-process scanning: the plugins are loaded by a worker process (here: this test executable relaunched in
+// worker mode, see main.cpp), so a plugin that crashes or hangs while it is scanned never takes the app down.
+namespace
+{
+struct WorkerFixture : Fixture
+{
+    juce::File crashOnceMarker = dir.getChildFile("crash-once");
+    WorkerFixture() { setenv("AMP_FAKE_CRASH_ONCE", crashOnceMarker.getFullPathName().toRawUTF8(), 1); }
+    ~WorkerFixture() { unsetenv("AMP_FAKE_CRASH_ONCE"); }
+
+    std::unique_ptr<amp::PluginHost> makeWorkerHost(juce::StringArray extraIds, int timeoutMs = 60000) const
+    {
+        auto host = makeFakePluginHost(dir, std::move(extraIds));
+        host->setScanWorker({ juce::File::getSpecialLocation(juce::File::currentExecutableFile), timeoutMs });
+        return host;
+    }
+};
+} // namespace
+
+TEST_CASE("plugin_host: out-of-process scan finds the plugins and the app survives the ones that crash")
+{
+    WorkerFixture f;
+    auto host = f.makeWorkerHost({ "fake://crash", "fake://crash-once" });
+    juce::StringArray names;
+    float last = 0.0f;
+    const auto error = host->scan([&](float p) { last = p; });
+    CHECK(error.isEmpty());
+    CHECK(last == 1.0f);
+
+    for (const auto& d : host->available())
+        names.add(d.name);
+    CHECK(names.contains("FakeGain"));
+    CHECK(names.contains("FakeSynth"));
+    CHECK_FALSE(names.contains("FakeCrash"));
+    CHECK(host->blacklisted().contains("fake://crash")); // crashed the worker twice: disabled
+    CHECK(f.dir.getChildFile("blacklist.txt").loadFileAsString().contains("fake://crash"));
+    CHECK_FALSE(f.dir.getChildFile("crash-marker").exists());
+
+    // Crashed once, then loaded in a fresh worker: found, not blacklisted (a plugin that only crashes after
+    // others were loaded into the same process, as some do).
+    CHECK(names.contains("FakeCrash-once"));
+    CHECK_FALSE(host->blacklisted().contains("fake://crash-once"));
+    CHECK(f.crashOnceMarker.exists());
+
+    // Results persist like an in-process scan's.
+    auto reloaded = f.makeHost();
+    REQUIRE(findByName(reloaded->available(), "FakeGain").has_value());
+    CHECK(reloaded->blacklisted().contains("fake://crash"));
+}
+
+#if ! JUCE_WINDOWS
+namespace
+{
+// Worker processes of this test binary still alive (pgrep output, empty when none).
+juce::String liveWorkers()
+{
+    juce::ChildProcess p;
+    if (! p.start(juce::StringArray { "pgrep", "-fl", juce::String("amp_tests --") + amp::kPluginScannerUid }))
+        return "pgrep failed";
+    return p.readAllProcessOutput().trim();
+}
+} // namespace
+#endif
+
+TEST_CASE("plugin_host: a plugin that hangs while scanned is killed after the timeout, retried once, then disabled")
+{
+    WorkerFixture f;
+    auto host = f.makeWorkerHost({ "fake://hang" }, 1500);
+    const auto started = juce::Time::getMillisecondCounter();
+    CHECK(host->scan({}).isEmpty());
+    const auto elapsed = juce::Time::getMillisecondCounter() - started;
+    CHECK(elapsed >= 3000); // two attempts (a slow first launch is not a crash) ...
+    CHECK(elapsed < 30000); // ... but not a long wait
+    CHECK(host->blacklisted().contains("fake://hang"));
+    CHECK(findByName(host->available(), "FakeGain").has_value());
+#if ! JUCE_WINDOWS
+    CHECK(liveWorkers().isEmpty()); // killed, not just asked to leave
+#endif
+}
+
+TEST_CASE("plugin_host: a Retry (unblacklist) made while a scan runs is not undone when it finishes")
+{
+    Fixture f;
+    REQUIRE(f.dir.getChildFile("crash-marker").replaceWithText("fake://boost"));
+    auto host = f.makeHost();
+    host->checkCrashMarkerOnStartup();
+    REQUIRE(host->blacklisted().contains("fake://boost"));
+
+    bool done = false;
+    REQUIRE(host->startScan({}, [&](const juce::String&) { done = true; }));
+    host->unblacklist("fake://boost"); // Settings -> Disabled plugins -> Retry, during the scan
+    const auto deadline = juce::Time::getMillisecondCounter() + 20000;
+    while (! done && juce::Time::getMillisecondCounter() < deadline)
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(10);
+    REQUIRE(done);
+    CHECK(host->blacklisted().isEmpty());
+    CHECK_FALSE(f.dir.getChildFile("blacklist.txt").loadFileAsString().contains("fake://boost"));
+    CHECK(f.makeHost()->blacklisted().isEmpty());
+}
+
+TEST_CASE("plugin_host: a worker that cannot be launched fails the scan without blacklisting anything")
+{
+    WorkerFixture f;
+    auto h = makeFakePluginHost(f.dir);
+    h->setScanWorker({ f.dir.getChildFile("no-such-executable"), 1000 });
+    const auto error = h->scan({});
+    CHECK(error.isNotEmpty());
+    CHECK(h->blacklisted().isEmpty());
+    CHECK(h->available().isEmpty());
+}
+
+TEST_CASE("plugin_host: startScan runs off the message thread and reports progress and completion on it")
+{
+    Fixture f;
+    auto host = f.makeHost();
+    std::vector<float> progress;
+    juce::StringArray names;
+    bool done = false;
+    juce::String doneError = "unset";
+    const auto messageThread = juce::Thread::getCurrentThreadId();
+    bool callbacksOnMessageThread = true;
+
+    REQUIRE(host->startScan(
+        [&](float p, const juce::String& name)
+        {
+            callbacksOnMessageThread = callbacksOnMessageThread && juce::Thread::getCurrentThreadId() == messageThread;
+            progress.push_back(p);
+            names.addIfNotAlreadyThere(name);
+        },
+        [&](const juce::String& error)
+        {
+            callbacksOnMessageThread = callbacksOnMessageThread && juce::Thread::getCurrentThreadId() == messageThread;
+            done = true;
+            doneError = error;
+        }));
+    CHECK(host->isScanning());
+    CHECK_FALSE(host->startScan({}, {})); // one at a time
+
+    const auto deadline = juce::Time::getMillisecondCounter() + 20000;
+    while (! done && juce::Time::getMillisecondCounter() < deadline)
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(10);
+    REQUIRE(done);
+    CHECK(doneError.isEmpty());
+    CHECK(callbacksOnMessageThread);
+    CHECK_FALSE(host->isScanning());
+    REQUIRE_FALSE(progress.empty());
+    CHECK(progress.back() == 1.0f);
+    CHECK(names.contains("FakeGain"));
+    CHECK(findByName(host->available(), "FakeGain").has_value());
+    CHECK(f.dir.getChildFile("known-plugins.xml").existsAsFile());
+}
+
+TEST_CASE("plugin_host: destroying the host cancels a running scan")
+{
+    WorkerFixture f;
+    auto host = f.makeWorkerHost({ "fake://hang" }, 60000);
+    REQUIRE(host->startScan({}, [](const juce::String&) { FAIL("done must not fire after destruction"); }));
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
+    const auto started = juce::Time::getMillisecondCounter();
+    host.reset(); // stops the scan thread and kills the worker instead of waiting out the timeout
+    CHECK(juce::Time::getMillisecondCounter() - started < 10000);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(100); // any late callback is dropped
 }
