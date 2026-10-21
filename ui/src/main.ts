@@ -18,7 +18,7 @@ import {
 } from './state';
 import { mountLearnOverlay, renderEdit } from './views/edit';
 import { renderStage } from './views/stage';
-import { onLibraryToggle, renderLibrary, toggleLibrary } from './views/library';
+import { installLibraryShortcuts, onLibraryToggle, renderLibrary, toggleLibrary } from './views/library';
 import { openSettings } from './views/settings';
 import { retryBlacklistedPlugin, saveRigAs, watchQuitRequests } from './rigActions';
 
@@ -215,6 +215,7 @@ renderStage(stageRoot);
 renderEdit(editRoot);
 mountLearnOverlay(app);
 renderLibrary(libraryPanel);
+installLibraryShortcuts(); // ⌘F and / open the library on its search field
 store.subscribe(render);
 render(store.get());
 
