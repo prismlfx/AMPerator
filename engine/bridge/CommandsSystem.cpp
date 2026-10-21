@@ -31,7 +31,7 @@ CommandResult Engine::listAssets(const juce::String& kind)
     return CommandResult::success(json::object({ { "assets", out } }));
 }
 
-CommandResult Engine::listPlugins()
+juce::var Engine::pluginsVar()
 {
     juce::Array<juce::var> out;
     for (auto& d : plugins->available())
@@ -45,13 +45,31 @@ CommandResult Engine::listPlugins()
         o->setProperty("numOutputChannels", d.numOutputChannels);
         out.add(p);
     }
-    return CommandResult::success(json::object({ { "plugins", out } }));
+    return out;
+}
+
+CommandResult Engine::listPlugins()
+{
+    return CommandResult::success(json::object({ { "plugins", pluginsVar() } }));
 }
 
 CommandResult Engine::rescanPlugins()
 {
-    plugins->scan([](float) {}); // blocks the message thread for the whole scan (in-process)
-    return listPlugins();
+    // Off the message thread, and in a worker process when the app set one up (Options::pluginScanWorker): a
+    // plugin that crashes while it loads is disabled instead of taking the app down. A scan already running is
+    // simply reported.
+    if (! plugins->isScanning())
+        plugins->startScan(
+            [this](float progress, const juce::String& name)
+            { bridge().emit("pluginScanProgress", json::object({ { "progress", progress }, { "plugin", name } })); },
+            [this](const juce::String& error)
+            {
+                auto data = json::object({ { "plugins", pluginsVar() } });
+                if (error.isNotEmpty())
+                    data.getDynamicObject()->setProperty("error", error);
+                bridge().emit("pluginsChanged", data);
+            });
+    return CommandResult::success(json::object({ { "scanning", true } }));
 }
 
 CommandResult Engine::listBlacklisted()

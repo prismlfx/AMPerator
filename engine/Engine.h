@@ -59,7 +59,8 @@ struct SettingsPatch
     Threading: everything (construction, commands, events, timers) runs on the message thread. Rig builds
     (RigLoader::build) run synchronously on the message thread (PluginHost needs it; AssetIndex/RigStore are
     single-threaded), so loading a rig briefly blocks the UI. AssetIndex rescans (watched folders) also run on
-    the message thread. rescanPlugins blocks the message thread for the whole plugin scan.
+    the message thread. rescanPlugins runs the plugin scan on a background thread (loading the plugins in a worker
+    process when Options::pluginScanWorker is set) and reports through events.
 
     Plans are built at the running device's spec; when the device (re)starts at a new rate/buffer the current
     rig is rebuilt and swapped. Without audio (startAudio = false) plans use ProcessSpec { 48000, 512 }. */
@@ -73,6 +74,11 @@ public:
         bool startAudio = true, startControls = true;
         std::vector<std::unique_ptr<juce::AudioPluginFormat>> pluginFormats; // added to PluginHost
         bool addDefaultPluginFormats = true;
+        /** Plugin scans load every plugin in this executable, relaunched in scanner mode (plugins/PluginScanner.h),
+            so a plugin that crashes while scanned never takes the app down. File() = in-process. The app passes
+            itself; a plugin still loading after pluginScanTimeoutMs is killed and disabled. */
+        juce::File pluginScanWorker;
+        int pluginScanTimeoutMs = 60000;
         juce::AudioDeviceManager* deviceManager = nullptr; // not owned; null = the Engine owns one (startAudio only)
         /** With startAudio: set up audio but leave the device closed until startAudio() is called (the app asks for
             microphone permission first, so the message thread never blocks on the OS permission prompt). */
@@ -151,6 +157,8 @@ public:
     CommandResult cancelAssignFootswitchKey();
     CommandResult listAssets(const juce::String& kind);
     CommandResult listPlugins();
+    /** Starts a background scan (one at a time): `pluginScanProgress` events, then `pluginsChanged` with the new
+        list. Result: {scanning: true} right away. */
     CommandResult rescanPlugins();
     CommandResult listBlacklisted();
     /** Removes `id` from the blacklist (the plugin may need a rescan to show up again). Result: listBlacklisted. */
@@ -203,6 +211,7 @@ private:
     void saveSettings();
     void applyAssetRoots();
     juce::var deviceStatusVar() const;
+    juce::var pluginsVar(); // listPlugins' array
     juce::var controlStatusVar() const;
     void pollStatus();
     void handleRawKey(int code);

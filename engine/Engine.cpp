@@ -85,6 +85,8 @@ Engine::Engine(Options o)
 
     // Plugins are not scanned at startup (rescanPlugins does that); a leftover crash marker blacklists its plugin.
     plugins = std::make_unique<PluginHost>(dataDir, std::move(o.pluginFormats), o.addDefaultPluginFormats);
+    if (o.pluginScanWorker != juce::File())
+        plugins->setScanWorker({ o.pluginScanWorker, o.pluginScanTimeoutMs });
     for (const auto& id : plugins->checkCrashMarkerOnStartup())
     {
         auto e = json::object({ { "message", plugins->displayNameFor(id) + " crashed last time and was disabled" },

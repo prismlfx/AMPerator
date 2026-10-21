@@ -87,7 +87,9 @@ Drop files into `Models/` and `IRs/`, or point Settings → *Watched folders* at
 
 ### Plugins
 
-`+` → *Plugins…* lists your VST3 and AU plugins after a scan (the *Rescan* button in that picker; it blocks the app for a moment). The picker sorts them into groups (Drive, Amps & Cabs, Modulation, Delay, Reverb, Dynamics, EQ, Filter & Wah, Pitch, Utility & Other, Instruments) from each plugin's declared category and name, with a search field and a **Guitar** toggle (on by default, remembered) that hides the utilities and instruments. A plugin that crashes during a scan or load is disabled on the next launch, with a **Retry** in Settings → *Disabled plugins*. Each plugin node has an **Open editor** action for its own window.
+`+` → *Plugins…* lists your VST3 and AU plugins after a scan (the *Rescan* button in that picker; the scan runs in the background with a progress readout). The picker sorts them into groups (Drive, Amps & Cabs, Modulation, Delay, Reverb, Dynamics, EQ, Filter & Wah, Pitch, Utility & Other, Instruments) from each plugin's declared category and name, with a search field and a **Guitar** toggle (on by default, remembered) that hides the utilities and instruments. The scan loads each plugin in a separate helper process (the app relaunched in scanner mode), so a plugin that crashes or hangs while it is scanned never takes the app down: it gets one more try in a fresh helper, and if it fails that too it is switched off (the scan carries on) and shows up in Settings → *Disabled plugins* with a **Retry**. A plugin that crashes later, while it is loaded into a rig, is disabled on the next launch the same way. Each plugin node has an **Open editor** action for its own window.
+
+If a scan misbehaves, run the same scan from a terminal and watch it: `AMPerator.app/Contents/MacOS/AMPerator --scan-plugins` prints each plugin as it is scanned (with `AMP_SCAN_TRACE=1` in the environment, also every worker launch, crash and retry).
 
 ### Footswitch and MIDI
 

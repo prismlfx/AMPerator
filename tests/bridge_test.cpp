@@ -114,6 +114,19 @@ struct Fixture
 
     juce::var state() { return ok("getState"); }
 
+    // rescanPlugins answers at once; the scan runs on a thread and ends with a pluginsChanged event, which this
+    // waits for (pumping the message loop). Returns that event's data.
+    juce::var rescan()
+    {
+        const auto before = events("pluginsChanged").size();
+        REQUIRE(static_cast<bool>(ok("rescanPlugins")["scanning"]));
+        const auto deadline = juce::Time::getMillisecondCounter() + 20000;
+        while (events("pluginsChanged").size() == before && juce::Time::getMillisecondCounter() < deadline)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil(10);
+        REQUIRE(events("pluginsChanged").size() > before);
+        return lastEvent("pluginsChanged");
+    }
+
     // Node id of the first node of `type` in the current rig.
     juce::String nodeOfType(const juce::String& type)
     {
@@ -233,7 +246,7 @@ TEST_CASE("bridge: addNode emits rigLoaded with node in order")
     CHECK(static_cast<bool>(f.lastEvent("rigDirty")["dirty"]));
 
     // Plugins come from the PluginHost; the added node runs live (not a placeholder).
-    f.ok("rescanPlugins");
+    f.rescan();
     auto plugins = f.ok("listPlugins");
     juce::var gain;
     for (auto& p : *plugins["plugins"].getArray())
@@ -265,7 +278,7 @@ TEST_CASE("bridge: listPlugins and rescanPlugins report category, instrument fla
                 return p;
         return juce::var();
     };
-    const auto rescanned = f.ok("rescanPlugins")["plugins"];
+    const auto rescanned = f.rescan()["plugins"];
     const auto listed = f.ok("listPlugins")["plugins"];
     for (const auto& list : { rescanned, listed })
     {
@@ -302,6 +315,28 @@ TEST_CASE("bridge: listPlugins and rescanPlugins report category, instrument fla
     // The richer object is still accepted as addNode's plugin reference.
     f.ok("addNode", obj({ { "type", "Plugin" }, { "index", 0 }, { "plugin", byName(listed, "FakeMono") } }));
     CHECK(f.lastEvent("rigLoaded")["report"]["placeholderNodeIds"].getArray()->isEmpty());
+}
+
+TEST_CASE("bridge: rescanPlugins returns at once and reports progress, then pluginsChanged with the list")
+{
+    Fixture f;
+    CHECK(f.events("pluginsChanged").empty());
+    const auto done = f.rescan();
+    REQUIRE(done["plugins"].isArray());
+    CHECK(done["plugins"].getArray()->size() == f.ok("listPlugins")["plugins"].getArray()->size());
+    CHECK(done["plugins"].getArray()->size() > 0);
+    CHECK(done["error"].isVoid());
+
+    const auto progress = f.events("pluginScanProgress");
+    REQUIRE(! progress.empty());
+    for (const auto& p : progress)
+    {
+        const auto v = static_cast<double>(p["progress"]);
+        CHECK(v >= 0.0);
+        CHECK(v <= 1.0);
+        CHECK(p.hasProperty("plugin"));
+    }
+    CHECK(static_cast<double>(progress.back()["progress"]) == 1.0);
 }
 
 TEST_CASE("bridge: toggleBypass emits bypassChanged")
@@ -749,7 +784,7 @@ TEST_CASE("bridge: openPluginEditor hands the live plugin instance and node id t
     Fixture f;
     CHECK_FALSE(static_cast<bool>(f.call("openPluginEditor", obj({ { "id", f.nodeOfType("Gate") } }))["ok"]));
 
-    f.ok("rescanPlugins");
+    f.rescan();
     juce::var gain;
     for (auto& p : *f.ok("listPlugins")["plugins"].getArray())
         if (p["name"].toString() == "FakeGain")
@@ -795,7 +830,7 @@ TEST_CASE("bridge: plugin nodes carry a cached editor snapshot in their art")
 {
     Fixture f;
     const amp_test::ScopedFakeEditor editor(amp_test::FakeEditorKind::Painted);
-    f.ok("rescanPlugins");
+    f.rescan();
     juce::var gain;
     for (auto& p : *f.ok("listPlugins")["plugins"].getArray())
         if (p["name"].toString() == "FakeGain")
@@ -868,7 +903,7 @@ namespace
 {
 juce::var fakeGain(Fixture& f)
 {
-    f.ok("rescanPlugins");
+    f.rescan();
     for (auto& p : *f.ok("listPlugins")["plugins"].getArray())
         if (p["name"].toString() == "FakeGain")
             return p;

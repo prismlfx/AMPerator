@@ -190,9 +190,32 @@ describe('plugin picker', () => {
     await flush();
     expect(lastCommand()).toMatchObject({ cmd: 'rescanPlugins' });
     expect(modal().textContent).toContain('Scanning plugins…');
-    juce.reply(lastCommand().id, true, { plugins: PLUGINS });
+    juce.reply(lastCommand().id, true, { scanning: true }); // the scan runs on; events follow
     await flush();
+    expect(modal().textContent).toContain('Scanning plugins…');
+    juce.fromBackend('amp', { v: 1, event: 'pluginScanProgress', data: { progress: 0.5, plugin: 'Kontakt 8' } });
+    expect(modal().textContent).toContain('Scanning plugins… 50% · Kontakt 8');
+    expect([...modal().querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Scanning…')!.disabled).toBe(true);
+    juce.fromBackend('amp', { v: 1, event: 'pluginsChanged', data: { plugins: PLUGINS } });
     expect(groupSummary().map(([id]) => id)).toEqual(['drive', 'amps-cabs', 'delay', 'reverb']);
+    expect(modal().textContent).not.toContain('Scanning');
+  });
+
+  it('follows a scan started elsewhere and stops listening when closed', async () => {
+    await open();
+    juce.fromBackend('amp', { v: 1, event: 'pluginScanProgress', data: { progress: 0.25, plugin: 'Raum' } });
+    expect(modal().textContent).toContain('Scanning plugins… 25% · Raum');
+    juce.fromBackend('amp', { v: 1, event: 'pluginsChanged', data: { plugins: PLUGINS.slice(0, 1) } });
+    expect(groupSummary()).toEqual([['delay', 'Delay', '1']]);
+    key(search(), 'Escape');
+    expect(document.querySelector('.modal')).toBeNull();
+    juce.fromBackend('amp', { v: 1, event: 'pluginsChanged', data: { plugins: PLUGINS } }); // no modal: nothing to update, no error
+  });
+
+  it('shows the engine\'s message when a scan could not run', async () => {
+    await open();
+    juce.fromBackend('amp', { v: 1, event: 'pluginsChanged', data: { plugins: PLUGINS, error: 'Could not start the plugin scan worker' } });
+    expect(document.body.textContent).toContain('Could not start the plugin scan worker');
   });
 
   it('works with plugin lists from older engines (no category fields)', async () => {

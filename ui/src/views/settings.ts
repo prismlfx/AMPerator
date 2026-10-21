@@ -105,7 +105,7 @@ export function openSettings() {
       return;
     }
     disabled.replaceChildren(
-      el('p', { class: 'muted' }, 'These plugins crashed AMPerator and were switched off. Retry re-enables one (rescan plugins if it does not show up).'),
+      el('p', { class: 'muted' }, 'These plugins crashed or hung while AMPerator scanned or loaded them and were switched off. Retry re-enables one (rescan plugins if it does not show up).'),
       el(
         'ul',
         { class: 'folder-list' },

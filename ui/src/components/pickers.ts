@@ -1,6 +1,6 @@
 // Modal pickers used by the pedalboard: NAM model / IR, plugin (grouped, with search and rescan) and built-in art.
 
-import { call } from '../bridge';
+import { call, on } from '../bridge';
 import { confirmDialog, el, openModal, toast } from '../dialog';
 import { patchNode, type RigNode } from '../state';
 import { ARCHETYPES, archetypeLabel, artKind } from '../art/archetypes';
@@ -54,7 +54,6 @@ export function pickAsset(id: string, kind: 'nam' | 'ir'): Promise<void> {
   });
 }
 
-const RESCAN_TIMEOUT_MS = 30 * 60 * 1000; // the engine answers when the scan is done
 const GUITAR_ONLY_KEY = 'amperator.pluginPicker.guitarOnly';
 const COLLAPSED_BY_DEFAULT: GroupId[] = ['utility', 'instrument'];
 
@@ -78,11 +77,17 @@ function saveGuitarOnly(on: boolean) {
 const formatBadge = (format: string) => (format === 'AudioUnit' ? 'AU' : format);
 
 /** The plugin picker: search, a Guitar toggle (hides Utility & Other and Instruments), Rescan, and the scanned plugins
-    in groups (pluginCategories.ts). Choosing one adds a Plugin node at chain position `index`. */
+    in groups (pluginCategories.ts). Choosing one adds a Plugin node at chain position `index`. A scan runs in the
+    engine's background (rescanPlugins returns at once); the picker follows it through pluginScanProgress events and
+    takes the new list from pluginsChanged -- also for a scan started elsewhere. */
 export function openPluginPicker(index: number) {
-  const modal = openModal('Add a plugin');
+  const modal = openModal('Add a plugin', () => {
+    offProgress();
+    offDone();
+  });
   let plugins: PluginInfo[] | null = null; // null until listPlugins replies
-  let busy = false;
+  let busy = false; // a scan is running
+  let scan: { progress: number; plugin: string } | null = null; // the last progress event of that scan
   let query = '';
   let guitarOnly = loadGuitarOnly();
   const collapsed = new Set<GroupId>(COLLAPSED_BY_DEFAULT);
@@ -131,22 +136,33 @@ export function openPluginPicker(index: number) {
 
   async function runRescan() {
     const ok = await confirmDialog(
-      'Scanning checks every VST3 and Audio Unit plugin on this Mac. It may take a while, and AMPerator stops responding until it is done.',
+      'Scanning loads every VST3 and Audio Unit plugin on this Mac, each in a helper process, so one that crashes is just switched off. It can take a few minutes; you can keep playing meanwhile.',
       'Scan now',
     );
     if (!ok) return;
     busy = true;
+    scan = null;
     render();
     try {
-      const r = await call<{ plugins: PluginInfo[] }>('rescanPlugins', undefined, RESCAN_TIMEOUT_MS);
-      plugins = r.plugins;
+      await call('rescanPlugins');
     } catch (e) {
-      showError(e);
-    } finally {
       busy = false;
+      showError(e);
       render();
     }
   }
+  const offProgress = on('pluginScanProgress', (d: { progress: number; plugin: string }) => {
+    busy = true;
+    scan = d;
+    render();
+  });
+  const offDone = on('pluginsChanged', (d: { plugins: PluginInfo[]; error?: string }) => {
+    busy = false;
+    scan = null;
+    plugins = d.plugins;
+    if (d.error) toast(d.error);
+    render();
+  });
 
   function renderGroup(group: Group, members: PluginInfo[]): HTMLElement {
     const open = !isCollapsed(group.id);
@@ -192,7 +208,9 @@ export function openPluginPicker(index: number) {
       return;
     }
     if (busy) {
-      list.replaceChildren(el('p', { class: 'muted' }, 'Scanning plugins…'));
+      const pct = scan ? ` ${Math.round(scan.progress * 100)}%` : '';
+      const name = scan?.plugin ? ` · ${scan.plugin}` : '';
+      list.replaceChildren(el('p', { class: 'muted plugin-scanning' }, `Scanning plugins…${pct}${name}`));
       return;
     }
     if (plugins.length === 0) {

@@ -92,7 +92,7 @@ export function invokeNative(name: string, ...params: unknown[]): Promise<unknow
 }
 
 /** Sends a bridge command; resolves with its `result`, rejects with its `error` or after `timeoutMs` (default 10 s)
-    without a reply. Commands that block the engine for long (rescanPlugins) pass a longer timeout. */
+    without a reply. */
 export function call<T = any>(cmd: string, args?: object, timeoutMs = CALL_TIMEOUT_MS): Promise<T> {
   if (!attach()) return Promise.reject(new Error('not running inside AMPerator (no native backend)'));
   const id = nextCallId++;
