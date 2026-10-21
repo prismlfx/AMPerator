@@ -37,7 +37,20 @@ TEST_CASE("rig_store: save then load round trips")
     REQUIRE(entries[0].id == r.id);
     REQUIRE(entries[0].name == "Clean");
     REQUIRE(entries[0].band == "Band A");
+    REQUIRE(entries[0].tags.isEmpty());
     REQUIRE(store.load("nope").error.isNotEmpty());
+}
+
+TEST_CASE("rig_store: list carries each rig's tags")
+{
+    TempDir t;
+    amp::RigStore store(t.dir);
+    auto r = rig("Djent", "Metal");
+    r.tags = { "Parkway Drive", "Wild Eyes" };
+    REQUIRE(store.save(r).wasOk());
+    auto entries = store.list();
+    REQUIRE(entries.size() == 1);
+    REQUIRE(entries[0].tags == juce::StringArray { "Parkway Drive", "Wild Eyes" });
 }
 
 TEST_CASE("rig_store: illegal characters sanitized")

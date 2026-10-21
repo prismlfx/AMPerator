@@ -242,6 +242,8 @@ const std::map<juce::String, Handler>& commands()
         { "setSettings", [](Engine& e, const juce::var& a) { return e.setSettings(settingsPatch(a)); } },
         { "setTuner", [](Engine& e, const juce::var& a) { return e.setTuner(boolean(a, "on")); } },
         { "toggleFavorite", [](Engine& e, const juce::var& a) { return e.toggleFavorite(nonEmpty(a, "id")); } },
+        { "setTags", [](Engine& e, const juce::var& a) { return e.setTags(stringList(a, "tags")); } },
+        { "listTags", [](Engine& e, const juce::var&) { return e.listTags(); } },
         { "restoreBackup", [](Engine& e, const juce::var& a) { return e.restoreBackup(nonEmpty(a, "id")); } },
         { "setNodeArt", [](Engine& e, const juce::var& a)
           { return e.setNodeArt(nonEmpty(a, "id"), optStr(a, "archetype"), optStr(a, "imageFile")); } },

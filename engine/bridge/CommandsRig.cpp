@@ -1,4 +1,4 @@
-// Engine command handlers: rig library (load/save/step/delete/backups/favorites), chain edits, live edits,
+// Engine command handlers: rig library (load/save/step/delete/backups/favorites/tags), chain edits, live edits,
 // mapping learn and node art. Split out of Engine.cpp to keep the facade's wiring readable.
 
 #include "Engine.h"
@@ -7,6 +7,10 @@
 #include "model/ChainGraph.h"
 #include "storage/AtomicFile.h"
 
+#include <algorithm>
+#include <map>
+#include <optional>
+
 namespace amp
 {
 namespace
@@ -14,6 +18,41 @@ namespace
 juce::String assetKindFor(NodeType t)
 {
     return t == NodeType::NamAmp ? "nam" : t == NodeType::CabIR ? "ir" : juce::String();
+}
+
+/** setTags' rules (Engine::setTags); on failure `error` says why and the result is empty. */
+std::optional<juce::StringArray> normalizeTags(const juce::StringArray& in, juce::String& error)
+{
+    juce::StringArray out;
+    for (const auto& raw : in)
+    {
+        const auto tag = raw.trim();
+        if (tag.isEmpty())
+        {
+            error = "tags must not be empty";
+            return std::nullopt;
+        }
+        if (tag.length() > Engine::maxTagLength)
+        {
+            error = "tag \"" + tag.substring(0, 20) + "...\" is too long (at most " + juce::String(Engine::maxTagLength)
+                    + " characters)";
+            return std::nullopt;
+        }
+        for (auto c : tag)
+            if (c < 0x20 || (c >= 0x7f && c <= 0x9f))
+            {
+                error = "tags must not contain control characters (line breaks, tabs, ...)";
+                return std::nullopt;
+            }
+        if (! out.contains(tag, true)) // case-insensitive: the first spelling wins
+            out.add(tag);
+    }
+    if (out.size() > Engine::maxTags)
+    {
+        error = "too many tags: " + juce::String(out.size()) + " (at most " + juce::String(Engine::maxTags) + ")";
+        return std::nullopt;
+    }
+    return out;
 }
 
 NodeDoc* findIn(RigDocument& doc, const juce::String& id)
@@ -31,7 +70,7 @@ CommandResult Engine::listRigs()
 {
     juce::Array<juce::var> rigs;
     for (auto& e : store.list())
-        rigs.add(json::object({ { "id", e.id }, { "name", e.name }, { "band", e.band },
+        rigs.add(json::object({ { "id", e.id }, { "name", e.name }, { "band", e.band }, { "tags", json::strings(e.tags) },
                                 { "favorite", settings.favoriteRigIds.contains(e.id) } }));
     return CommandResult::success(json::object({ { "rigs", rigs }, { "bands", json::strings(store.bands()) } }));
 }
@@ -175,6 +214,58 @@ CommandResult Engine::toggleFavorite(const juce::String& id)
         settings.favoriteRigIds.removeString(id);
     saveSettings();
     return CommandResult::success(json::object({ { "id", id }, { "favorite", favorite } }));
+}
+
+// ---- Tags ----
+
+CommandResult Engine::setTags(const juce::StringArray& tags)
+{
+    if (! live)
+        return CommandResult::failure("no rig loaded");
+    juce::String error;
+    const auto clean = normalizeTags(tags, error);
+    if (! clean)
+        return CommandResult::failure(error);
+    if (*clean != live->doc.tags) // case-sensitive: re-spelling a tag is a change
+    {
+        live->doc.tags = *clean;
+        bridge().emit("tagsChanged", json::object({ { "tags", json::strings(*clean) } }));
+        setDirty(true);
+    }
+    return CommandResult::success(json::object({ { "tags", json::strings(*clean) } }));
+}
+
+CommandResult Engine::listTags()
+{
+    struct Count { juce::String tag; int count = 0; };
+    std::vector<Count> counts;
+    std::map<juce::String, size_t> byKey; // lower-case tag -> index in counts
+    for (const auto& e : store.list())
+    {
+        juce::StringArray seen; // a rig counts once per tag, even if its file repeats one
+        for (const auto& raw : e.tags)
+        {
+            const auto tag = raw.trim();
+            const auto key = tag.toLowerCase();
+            if (tag.isEmpty() || seen.contains(key))
+                continue;
+            seen.add(key);
+            const auto [it, added] = byKey.try_emplace(key, counts.size());
+            if (added)
+                counts.push_back({ tag, 0 });
+            ++counts[it->second].count;
+        }
+    }
+    std::stable_sort(counts.begin(), counts.end(), [](const Count& a, const Count& b)
+    {
+        if (a.count != b.count)
+            return a.count > b.count;
+        return a.tag.compareIgnoreCase(b.tag) < 0;
+    });
+    juce::Array<juce::var> out;
+    for (const auto& c : counts)
+        out.add(json::object({ { "tag", c.tag }, { "count", c.count } }));
+    return CommandResult::success(json::object({ { "tags", out } }));
 }
 
 // ---- Chain edits (rebuild + swap) ----

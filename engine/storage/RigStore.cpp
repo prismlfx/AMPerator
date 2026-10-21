@@ -113,7 +113,7 @@ std::vector<RigEntry> RigStore::list() const
     {
         if (!s.rig || s.rig->id.isEmpty())
             continue;
-        out.push_back({ s.rig->id, s.rig->name, s.rig->band, s.file });
+        out.push_back({ s.rig->id, s.rig->name, s.rig->band, s.file, s.rig->tags });
     }
     resolveDuplicateIds(out);
     for (auto& e : out)

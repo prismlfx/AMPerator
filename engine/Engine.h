@@ -162,6 +162,14 @@ public:
     CommandResult setSettings(const SettingsPatch&);
     CommandResult setTuner(bool on);
     CommandResult toggleFavorite(const juce::String& id);
+    /** Replaces the current rig's tags (trimmed, non-empty, <= maxTagLength characters, no control characters;
+        duplicates dropped case-insensitively keeping the first spelling; at most maxTags) -> tagsChanged, rigDirty{true}.
+        An unchanged list changes nothing. Invalid tags -> failure, rig untouched. */
+    CommandResult setTags(const juce::StringArray& tags);
+    /** Every tag of the saved rigs, merged case-insensitively (first spelling in list order), counted per rig and
+        sorted by count (descending), then name. */
+    CommandResult listTags();
+    static constexpr int maxTags = 32, maxTagLength = 40;
     CommandResult restoreBackup(const juce::String& id);
     CommandResult setNodeArt(const juce::String& id, const std::optional<juce::String>& archetype,
                              const std::optional<juce::String>& imageFile);

@@ -1133,3 +1133,125 @@ TEST_CASE("bridge: the Output node's level is the master volume")
         if (n.id == out)
             CHECK(static_cast<double>(n.params["level"]) == -6.0);
 }
+
+namespace
+{
+juce::var tagList(std::initializer_list<juce::String> tags)
+{
+    juce::Array<juce::var> arr;
+    for (auto& t : tags)
+        arr.add(t);
+    return arr;
+}
+
+juce::StringArray asStrings(const juce::var& arr)
+{
+    juce::StringArray out;
+    if (auto* a = arr.getArray())
+        for (auto& v : *a)
+            out.add(v.toString());
+    return out;
+}
+} // namespace
+
+TEST_CASE("bridge: setTags trims and dedupes, marks the rig dirty, and the tags survive saveRig and a fresh load")
+{
+    Fixture f;
+    const auto id = f.ok("newRig", obj({ { "name", "Peavey 5150 - Djent" }, { "band", "Metal" } }))["id"].toString();
+    CHECK(asStrings(f.state()["rig"]["tags"]).isEmpty()); // the rig payload always carries tags
+    f.ok("saveRig");
+    f.sent.clear();
+
+    auto r = f.ok("setTags", obj({ { "tags", tagList({ "  Parkway Drive ", "Wild Eyes", "parkway drive", "metal" }) } }));
+    const juce::StringArray expected { "Parkway Drive", "Wild Eyes", "metal" };
+    CHECK(asStrings(r["tags"]) == expected); // first spelling wins
+    CHECK(asStrings(f.lastEvent("tagsChanged")["tags"]) == expected);
+    CHECK(static_cast<bool>(f.lastEvent("rigDirty")["dirty"]));
+    CHECK(asStrings(f.state()["rig"]["tags"]) == expected);
+    CHECK(f.events("rigLoaded").empty()); // a tag edit does not rebuild the rig
+
+    // Setting the same list again changes nothing.
+    f.ok("saveRig");
+    f.sent.clear();
+    f.ok("setTags", obj({ { "tags", tagList({ "Parkway Drive", "Wild Eyes", "metal" }) } }));
+    CHECK(f.events("rigDirty").empty());
+    CHECK(f.events("tagsChanged").empty());
+
+    REQUIRE(RigStore(f.lib).load(id).rig.has_value());
+    CHECK(RigStore(f.lib).load(id).rig->tags == expected);
+
+    f.start(); // a fresh engine loads the last rig from disk
+    CHECK(f.state()["rig"]["id"].toString() == id);
+    CHECK(asStrings(f.state()["rig"]["tags"]) == expected);
+    f.ok("loadRig", obj({ { "id", id } }));
+    CHECK(asStrings(f.lastEvent("rigLoaded")["rig"]["tags"]) == expected);
+
+    // An empty list clears them.
+    CHECK(asStrings(f.ok("setTags", obj({ { "tags", juce::Array<juce::var>() } }))["tags"]).isEmpty());
+    CHECK(asStrings(f.state()["rig"]["tags"]).isEmpty());
+}
+
+TEST_CASE("bridge: setTags rejects invalid tags with a clear message and leaves the rig unchanged")
+{
+    Fixture f;
+    f.ok("newRig", obj({ { "name", "Validate" } }));
+    f.ok("setTags", obj({ { "tags", tagList({ "clean" }) } }));
+
+    auto fails = [&](const juce::var& args, const juce::String& messagePart)
+    {
+        auto r = f.call("setTags", args);
+        INFO(juce::JSON::toString(r));
+        CHECK_FALSE(static_cast<bool>(r["ok"]));
+        CHECK(r["error"].toString().containsIgnoreCase(messagePart));
+    };
+    fails(obj(), "tags");                                                            // missing
+    fails(obj({ { "tags", "clean" } }), "array");                                     // not an array
+    fails(obj({ { "tags", juce::Array<juce::var> { "ok", 3 } } }), "array of strings"); // not all strings
+    fails(obj({ { "tags", tagList({ "ok", "   " }) } }), "empty");
+    fails(obj({ { "tags", tagList({ juce::String::repeatedString("x", 41) }) } }), "40");
+    fails(obj({ { "tags", tagList({ "line\nbreak" }) } }), "control");
+    fails(obj({ { "tags", tagList({ juce::String("tab\there") }) } }), "control");
+
+    juce::Array<juce::var> many;
+    for (int i = 0; i < 33; ++i)
+        many.add("tag " + juce::String(i));
+    fails(obj({ { "tags", many } }), "32");
+
+    CHECK(asStrings(f.state()["rig"]["tags"]) == juce::StringArray { "clean" });
+
+    // The limits themselves are fine; duplicates do not count towards the maximum.
+    many.removeLast(2);
+    many.add("TAG 0");
+    many.add(juce::String::repeatedString("y", 40));
+    CHECK(f.ok("setTags", obj({ { "tags", many } }))["tags"].size() == 32);
+}
+
+TEST_CASE("bridge: listRigs carries each rig's tags and listTags counts tags across the library")
+{
+    Fixture f;
+    auto saveTagged = [&](const juce::String& band, const juce::String& name, std::initializer_list<juce::String> tags)
+    {
+        f.ok("newRig", obj({ { "name", name }, { "band", band } }));
+        f.ok("setTags", obj({ { "tags", tagList(tags) } }));
+        f.ok("saveRig");
+    };
+    saveTagged("A Band", "One", { "Clean", "70s" });
+    saveTagged("B Band", "Two", { "clean", "Metal" });
+    saveTagged("C Band", "Three", { "CLEAN", "metal", "Wild Eyes" });
+    f.ok("newRig", obj({ { "name", "Unsaved" } })); // not in the library
+    f.ok("setTags", obj({ { "tags", tagList({ "zzz" }) } }));
+
+    auto rigs = f.ok("listRigs")["rigs"];
+    REQUIRE(rigs.size() == 3);
+    CHECK(rigs[0]["name"].toString() == "One");
+    CHECK(asStrings(rigs[0]["tags"]) == juce::StringArray { "Clean", "70s" });
+    CHECK(asStrings(rigs[2]["tags"]) == juce::StringArray { "CLEAN", "metal", "Wild Eyes" });
+
+    auto tags = f.ok("listTags")["tags"];
+    REQUIRE(tags.size() == 4);
+    auto entry = [&](int i) { return tags[i]["tag"].toString() + "=" + tags[i]["count"].toString(); };
+    CHECK(entry(0) == "Clean=3"); // first-seen spelling (library order: band, then name)
+    CHECK(entry(1) == "Metal=2");
+    CHECK(entry(2) == "70s=1");   // equal counts: by name
+    CHECK(entry(3) == "Wild Eyes=1");
+}

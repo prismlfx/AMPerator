@@ -10,7 +10,12 @@
 
 namespace amp
 {
-struct RigEntry { juce::String id, name, band; juce::File file; };
+struct RigEntry
+{
+    juce::String id, name, band;
+    juce::File file;
+    juce::StringArray tags; // as stored in the file
+};
 
 /** On-disk rig library: <root>/Models, IRs, Rigs/<Band>/, Art.
     Rigs are indexed by scanning Rigs/<Band>/(star).amprig and reading each file's `id`.
