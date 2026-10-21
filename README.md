@@ -87,7 +87,7 @@ Drop files into `Models/` and `IRs/`, or point Settings → *Watched folders* at
 
 ### Plugins
 
-`+` → *Plugins…* lists your VST3 and AU plugins after a scan (the *Rescan* button in that picker; it blocks the app for a moment). A plugin that crashes during a scan or load is disabled on the next launch, with a **Retry** in Settings → *Disabled plugins*. Each plugin node has an **Open editor** action for its own window.
+`+` → *Plugins…* lists your VST3 and AU plugins after a scan (the *Rescan* button in that picker; it blocks the app for a moment). The picker sorts them into groups (Drive, Amps & Cabs, Modulation, Delay, Reverb, Dynamics, EQ, Filter & Wah, Pitch, Utility & Other, Instruments) from each plugin's declared category and name, with a search field and a **Guitar** toggle (on by default, remembered) that hides the utilities and instruments. A plugin that crashes during a scan or load is disabled on the next launch, with a **Retry** in Settings → *Disabled plugins*. Each plugin node has an **Open editor** action for its own window.
 
 ### Footswitch and MIDI
 
