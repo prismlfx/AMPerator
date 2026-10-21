@@ -859,6 +859,91 @@ select:disabled {
 .list-button:hover:not(:disabled) {
   background: var(--bg-input);
 }
+/* plugin picker: toolbar, collapsible groups, rows of name · vendor · format */
+.plugin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.plugin-toolbar .plugin-search {
+  flex: 1;
+  min-width: 0;
+}
+.plugin-toolbar .tag-filter {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+.plugin-groups {
+  max-height: 60vh;
+  overflow: auto;
+}
+.plugin-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 4px 6px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+.plugin-group-header:hover {
+  color: var(--text);
+}
+.plugin-group-header .chevron {
+  width: 12px;
+}
+.plugin-group-count {
+  font-weight: 400;
+  opacity: 0.7;
+}
+.plugin-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.list-button.plugin-row {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+.plugin-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-vendor {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-format {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+}
+.plugin-empty {
+  margin: 16px 4px;
+}
 .list-button .path,
 .library-list .path {
   font-size: 12px;
