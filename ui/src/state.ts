@@ -24,6 +24,7 @@ export interface Rig {
   id: string;
   name: string;
   band: string;
+  tags?: string[]; // free-form labels (style, decade, band, song): setTags
   nodes: RigNode[];
   mappings?: Mapping[];
   [key: string]: unknown;
@@ -86,6 +87,7 @@ export interface AppState {
   learning: boolean;
   learnNode: string; // the node an armed learn will map (set by the UI; "" when unknown)
   renamePending: boolean; // the top bar holds an unsaved rig name/band edit
+  saveCount: number; // bumped by every saveRig of the current rig (the library refreshes what it read from disk)
   startupErrors: StartupError[];
   settings: Partial<Settings>;
   deviceStatus: DeviceStatus;
@@ -106,6 +108,7 @@ const initialState: AppState = {
   learning: false,
   learnNode: '',
   renamePending: false,
+  saveCount: 0,
   startupErrors: [],
   settings: {},
   deviceStatus: { status: 'NoDevice', latencyMs: 0, xruns: -1 },
@@ -155,7 +158,7 @@ export function setRenamePending(renamePending: boolean) {
 
 /** After saveRig succeeded: the engine confirms the saved name/band in its reply (no rigLoaded). */
 export function rigSaved(name: string, band: string) {
-  if (current.rig) update({ rig: { ...current.rig, name, band }, saved: true });
+  if (current.rig) update({ rig: { ...current.rig, name, band }, saved: true, saveCount: current.saveCount + 1 });
 }
 
 /** setNodeArt's reply (the engine announces no event for it). */
@@ -210,6 +213,9 @@ export async function initStore(): Promise<void> {
     started = true;
     on('rigLoaded', (d) => update({ rig: d.rig, report: d.report, saved: d.saved, learning: false }));
     on('rigDirty', (d) => update({ dirty: d.dirty }));
+    on('tagsChanged', (d) => {
+      if (current.rig) update({ rig: { ...current.rig, tags: [...(d?.tags ?? [])] } });
+    });
     on('bypassChanged', (d) => updateNode(d.id, (n) => ({ ...n, bypass: d.bypass })));
     on('paramChanged', (d) => updateNode(d.id, (n) => ({ ...n, params: { ...n.params, [d.name]: d.value } })));
     on('deviceStatus', (d) => update({ deviceStatus: d }));

@@ -1,4 +1,4 @@
-// Stage view (spec §6, mockup C): the screen the app opens into. Band and rig name, the amp → cab line with art
+// Stage view (spec §6, mockup C): the screen the app opens into. Band, rig name and tags, the amp → cab line with art
 // thumbnails, three big footswitch tiles (mapped node, lit while it is on, flashing on every press), previous /
 // next rig, the input meter, the tuner and ✎ Edit. Keys (when no text field has focus): ← / → rig, T tuner,
 // E edit, Esc closes the tuner.
@@ -7,6 +7,7 @@ import { call, on } from '../bridge';
 import { el, toast } from '../dialog';
 import { ARCHETYPES, resolveArt, nodeArchetype, type NodeView } from '../art/archetypes';
 import { confirmDiscardIfDirty, setTunerOn, setView, store, type AppState, type RigNode } from '../state';
+import { isTyping } from '../keys';
 import { nodeTitle } from './edit';
 
 export const FOOTSWITCHES = ['footswitch:L', 'footswitch:M', 'footswitch:R'] as const;
@@ -58,15 +59,6 @@ function gearNodes(rig: AppState['rig']): RigNode[] {
 function gearName(n: RigNode): string {
   const file = (n.asset as { file?: string } | undefined)?.file;
   return file ? baseName(file) : nodeTitle(n);
-}
-
-function isTyping(target: EventTarget | null): boolean {
-  return [target, document.activeElement].some(
-    // isContentEditable covers inherited editing; the selector is a fallback where it is not implemented (jsdom).
-    (x) =>
-      x instanceof HTMLElement &&
-      (x.isContentEditable || !!x.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')),
-  );
 }
 
 /** Renders the stage view into `root`; returns a function that removes its listeners. */
@@ -220,8 +212,13 @@ export function renderStage(root: HTMLElement): () => void {
   let bodyKey = '';
   function renderBody(s: AppState) {
     const gear = gearNodes(s.rig) as NodeView[];
+    const tags = s.rig?.tags ?? [];
     const key = JSON.stringify(
-      !s.connected ? 'connecting' : !s.rig ? 'none' : [s.rig.name, s.rig.band, gear.map((n) => [n.id, gearName(n), resolveArt(n)])],
+      !s.connected
+        ? 'connecting'
+        : !s.rig
+          ? 'none'
+          : [s.rig.name, s.rig.band, tags, gear.map((n) => [n.id, gearName(n), resolveArt(n)])],
     );
     if (key === bodyKey) return;
     bodyKey = key;
@@ -248,6 +245,7 @@ export function renderStage(root: HTMLElement): () => void {
     body.replaceChildren(
       el('div', { class: 'stage-band' }, s.rig.band),
       el('h1', { class: 'stage-rig-name' }, s.rig.name),
+      ...(tags.length > 0 ? [el('div', { class: 'stage-tags muted', 'aria-label': 'Tags' }, tags.join(' · '))] : []),
       el('div', { class: 'stage-line', 'aria-label': 'Amp and cab' }, ...line),
     );
   }

@@ -319,6 +319,59 @@ describe('knob', () => {
   });
 });
 
+describe('rig tags', () => {
+  const chips = () => [...root.querySelectorAll('.edit-tags .tag-chip .tag-text')].map((c) => c.textContent);
+  const tagInput = () => root.querySelector<HTMLInputElement>('.edit-tags .tag-input')!;
+  function addTag(text: string) {
+    tagInput().value = text;
+    tagInput().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  }
+
+  it('shows the rig tags above the pedalboard and follows tagsChanged and rig loads', async () => {
+    await started(makeRig({ tags: ['70s', 'Led Zeppelin'] }));
+    edit.renderEdit(root);
+    expect(root.querySelector('.edit-tags')!.compareDocumentPosition(root.querySelector('.pedalboard')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(chips()).toEqual(['70s', 'Led Zeppelin']);
+    juce.fromBackend('amp', { v: 1, event: 'tagsChanged', data: { tags: ['70s'] } });
+    expect(chips()).toEqual(['70s']);
+    juce.fromBackend('amp', { v: 1, event: 'rigLoaded', data: { rig: makeRig({ id: 'r2', tags: undefined }), report: emptyReport, saved: true } });
+    expect(chips()).toEqual([]);
+  });
+
+  it('every change calls setTags with the full list', async () => {
+    await started(makeRig({ tags: ['70s'] }));
+    edit.renderEdit(root);
+    addTag('Parkway Drive');
+    expect(lastCommand()).toMatchObject({ cmd: 'setTags', args: { tags: ['70s', 'Parkway Drive'] } });
+    juce.reply(lastCommand().id, true, { tags: ['70s', 'Parkway Drive'] });
+    root.querySelector<HTMLButtonElement>('.edit-tags .tag-remove')!.click();
+    expect(lastCommand()).toMatchObject({ cmd: 'setTags', args: { tags: ['Parkway Drive'] } });
+  });
+
+  it('a rejected setTags shows why and puts the rig tags back', async () => {
+    await started(makeRig({ tags: ['70s'] }));
+    edit.renderEdit(root);
+    addTag('x'.repeat(10));
+    expect(chips()).toEqual(['70s', 'x'.repeat(10)]);
+    juce.reply(lastCommand().id, false, 'too many tags');
+    await flush();
+    expect(chips()).toEqual(['70s']);
+    expect(document.querySelector('.toast')!.textContent).toContain('too many tags');
+  });
+
+  it('suggests tags from listTags while typing', async () => {
+    await started(makeRig({ tags: [] }));
+    edit.renderEdit(root);
+    tagInput().focus();
+    expect(lastCommand()).toMatchObject({ cmd: 'listTags' });
+    juce.reply(lastCommand().id, true, { tags: [{ tag: 'Parkway Drive', count: 3 }, { tag: 'metal', count: 2 }] });
+    await flush();
+    tagInput().value = 'park';
+    tagInput().dispatchEvent(new Event('input', { bubbles: true }));
+    expect([...root.querySelectorAll('.tag-suggestion')].map((s) => s.textContent)).toEqual(['Parkway Drive']);
+  });
+});
+
 describe('library', () => {
   it('library groups rigs by band and calls loadRig on click', async () => {
     await started();

@@ -108,6 +108,14 @@ describe('store', () => {
     expect(s.saved).toBe(false);
   });
 
+  it('tagsChanged replaces the rig tags', async () => {
+    await started();
+    expect(state.store.get().rig!.tags).toBeUndefined();
+    juce.fromBackend('amp', { v: 1, event: 'tagsChanged', data: { tags: ['Parkway Drive', 'Wild Eyes'] } });
+    expect(state.store.get().rig!.tags).toEqual(['Parkway Drive', 'Wild Eyes']);
+    expect(state.store.get().rig!.name).toBe('Clean');
+  });
+
   it('dismissStartupError removes one banner', async () => {
     await started({
       startupErrors: [
@@ -171,6 +179,14 @@ describe('rigSaved', () => {
     state.rigSaved('Black Dog', 'Zeppelin');
     const s = state.store.get();
     expect([s.rig?.name, s.rig?.band, s.saved]).toEqual(['Black Dog', 'Zeppelin', true]);
+  });
+
+  it('counts saves, so views can refresh what they read from the library', async () => {
+    await started();
+    expect(state.store.get().saveCount).toBe(0);
+    state.rigSaved('Clean', 'My Tones');
+    state.rigSaved('Clean', 'My Tones');
+    expect(state.store.get().saveCount).toBe(2);
   });
 
   it('confirmDiscardIfDirty treats a pending rename as unsaved changes', async () => {

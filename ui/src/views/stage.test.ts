@@ -88,6 +88,26 @@ describe('stage view', () => {
     expect(root.querySelector('.stage-arrow')).not.toBeNull();
   });
 
+  it('shows the rig tags as muted text under the rig name, nothing when there are none', async () => {
+    await started(makeRig({ tags: ['clean', '60s', 'Parkway Drive'] }));
+    unmount = stage.renderStage(root);
+    const tags = root.querySelector('.stage-tags')!;
+    expect(tags.textContent).toBe('clean · 60s · Parkway Drive');
+    expect(tags.classList.contains('muted')).toBe(true);
+    expect(root.querySelector('.stage-rig-name')!.nextElementSibling).toBe(tags);
+
+    juce.fromBackend('amp', { v: 1, event: 'tagsChanged', data: { tags: ['Wild Eyes'] } });
+    expect(root.querySelector('.stage-tags')!.textContent).toBe('Wild Eyes');
+    juce.fromBackend('amp', { v: 1, event: 'tagsChanged', data: { tags: [] } });
+    expect(root.querySelector('.stage-tags')).toBeNull();
+  });
+
+  it('shows no tag line for a rig without tags', async () => {
+    await started();
+    unmount = stage.renderStage(root);
+    expect(root.querySelector('.stage-tags')).toBeNull();
+  });
+
   it('a user image replaces the amp thumbnail', async () => {
     const rig = makeRig();
     (rig.nodes[2] as any).art = { archetype: 'ac-chime', image: '/x/AMPerator/Art/me.png' };

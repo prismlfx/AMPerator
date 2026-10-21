@@ -461,6 +461,110 @@ select:disabled {
 .edit-view {
   min-height: 100%;
 }
+
+/* ---- rig tags (edit view) ---- */
+.edit-tags {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.edit-tags-label {
+  flex: none;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.tag-editor {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+.tag-editor:hover,
+.tag-editor:focus-within {
+  border-color: var(--border);
+  background: var(--bg-input);
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 1px 3px 1px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  font-size: 13px;
+  line-height: 22px;
+}
+.tag-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-remove {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.tag-remove:hover {
+  background: var(--border);
+  color: var(--text);
+}
+.tag-input {
+  flex: 1;
+  min-width: 120px;
+  height: 26px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.tag-suggestions {
+  position: absolute;
+  top: 100%; /* placed under the input by tagEditor.ts */
+  left: 0;
+  z-index: 25;
+  min-width: 220px;
+  margin: 4px 0 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+}
+.tag-suggestion {
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tag-suggestion:hover,
+.tag-suggestion[aria-selected='true'] {
+  background: var(--bg-input);
+  color: var(--accent);
+}
 .master-level {
   display: flex;
   align-items: center;
@@ -988,6 +1092,12 @@ select:disabled {
   margin: 2px 0 18px;
   font-size: clamp(36px, 6vw, 64px);
   line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+.stage-tags {
+  margin: -12px 0 18px;
+  font-size: 15px;
+  letter-spacing: 0.02em;
   overflow-wrap: anywhere;
 }
 .stage-line {

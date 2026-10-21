@@ -1,13 +1,14 @@
 // Edit view (pedalboard): the rig's nodes as pedal / amp / cab cards in signal order (Input and Output are not
 // shown). Click a card to show its knobs, drag to reorder, + to add, right-click or ⋯ for the card menu
 // (footswitch learn / clear, art, plugin editor, remove). Placeholder (missing) nodes are drawn bypassed, without knobs;
-// a missing model or IR offers Locate… (pick the file from the library). Below the board: the master level (the
-// Output node's `level`).
+// a missing model or IR offers Locate… (pick the file from the library). Above the board: the rig's tags (style,
+// decade, band, song — setTags). Below the board: the master level (the Output node's `level`).
 
 import { call } from '../bridge';
 import { createKnob, throttle, type Knob } from '../components/knob';
 import { el, openMenu, toast, type MenuItem } from '../dialog';
 import { openArtDialog, openPluginPicker, pickAsset } from '../components/pickers';
+import { createTagEditor } from '../components/tagEditor';
 import { resolveArt, type NodeView } from '../art/archetypes';
 import { setLearning, store, type AppState, type Mapping, type RigNode } from '../state';
 
@@ -105,7 +106,14 @@ export function renderEdit(root: HTMLElement): void {
 
   const board = el('div', { class: 'pedalboard', role: 'list', 'aria-label': 'Signal chain' });
   const master = el('div', { class: 'master-level', 'aria-label': 'Master level' });
-  root.replaceChildren(el('div', { class: 'edit-view' }, board, master));
+  const tagEditor = createTagEditor({
+    tags: [],
+    label: 'Rig tags',
+    onChange: (tags) => void saveTags(tags),
+    suggestions: async () => (await call<{ tags: { tag: string }[] }>('listTags')).tags.map((t) => t.tag),
+  });
+  const tagRow = el('div', { class: 'edit-tags' }, el('span', { class: 'edit-tags-label' }, 'Tags'), tagEditor.el);
+  root.replaceChildren(el('div', { class: 'edit-view' }, tagRow, board, master));
 
   let key = '';
   let knobs = new Map<string, Knob>(); // `${nodeId}/${param}`
@@ -115,7 +123,28 @@ export function renderEdit(root: HTMLElement): void {
   // Bumped by every rebuild: knob/toggle senders of discarded cards check it and drop their sends.
   let generation = 0;
 
+  let tagsKey = '';
+  function renderTags(s: AppState) {
+    tagRow.hidden = !s.connected || !s.rig;
+    const k = JSON.stringify([s.rig?.id, s.rig?.tags ?? []]);
+    if (k === tagsKey) return;
+    tagsKey = k;
+    tagEditor.setTags(s.rig?.tags ?? []);
+  }
+
+  /** Every add / remove sends the complete list; the engine answers with tagsChanged (the normalized list). */
+  async function saveTags(tags: string[]) {
+    try {
+      await call('setTags', { tags });
+    } catch (e) {
+      showError(e);
+      tagsKey = ''; // show the rig's tags again
+      renderTags(store.get());
+    }
+  }
+
   function render(s: AppState) {
+    renderTags(s);
     const k = structureKey(s);
     if (k !== key && !dragActive) {
       key = k;
@@ -424,6 +453,7 @@ export function renderEdit(root: HTMLElement): void {
   const unsubscribe = store.subscribe(render);
   disposers.set(root, () => {
     unsubscribe();
+    tagEditor.dispose();
     generation++;
     for (const k of knobs.values()) k.dispose();
   });
