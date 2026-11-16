@@ -40,6 +40,9 @@ add_library(amp_engine STATIC
   online/HttpTransport.h
   online/Pkce.cpp
   online/Pkce.h
+  online/SecureStore.h
+  online/KeychainStore.cpp
+  online/KeychainStore.h
   dsp/BuiltinNodes.cpp
   dsp/BuiltinNodes.h
   dsp/CabIRNode.cpp
@@ -85,5 +88,5 @@ target_link_libraries(amp_engine PUBLIC
   juce::juce_recommended_warning_flags)
 if(APPLE)
   # IOHIDCheckAccess / IOHIDRequestAccess (Input Monitoring prompt) for the footswitch.
-  target_link_libraries(amp_engine PRIVATE "-framework IOKit" "-framework CoreFoundation")
+  target_link_libraries(amp_engine PRIVATE "-framework IOKit" "-framework CoreFoundation" "-framework Security")
 endif()
