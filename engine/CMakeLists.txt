@@ -37,6 +37,9 @@ add_library(amp_engine STATIC
   control/MidiControl.h
   assets/AssetIndex.cpp
   assets/AssetIndex.h
+  online/HttpTransport.h
+  online/Pkce.cpp
+  online/Pkce.h
   dsp/BuiltinNodes.cpp
   dsp/BuiltinNodes.h
   dsp/CabIRNode.cpp
