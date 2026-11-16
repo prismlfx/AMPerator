@@ -38,6 +38,8 @@ add_library(amp_engine STATIC
   assets/AssetIndex.cpp
   assets/AssetIndex.h
   online/HttpTransport.h
+  online/Placement.cpp
+  online/Placement.h
   online/Pkce.cpp
   online/Pkce.h
   online/ProviderIndex.cpp
