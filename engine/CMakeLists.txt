@@ -43,6 +43,10 @@ add_library(amp_engine STATIC
   online/SecureStore.h
   online/Tone3000Auth.cpp
   online/Tone3000Auth.h
+  online/Tone3000Client.cpp
+  online/Tone3000Client.h
+  online/Tone3000Types.cpp
+  online/Tone3000Types.h
   online/KeychainStore.cpp
   online/KeychainStore.h
   dsp/BuiltinNodes.cpp
