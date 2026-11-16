@@ -258,26 +258,49 @@ TEST_CASE("online_client: model() parses a single model")
     REQUIRE(r.value->modelUrl == "https://www.tone3000.com/api/v1/models/m_123/download");
 }
 
-TEST_CASE("online_client: 401 then 200 retries exactly once")
+const char* const refreshedTokens =
+    R"({"access_token":"NEW","refresh_token":"RT2","token_type":"Bearer","expires_in":3600})";
+
+size_t refreshRequests(const FakeHttp& http)
 {
-    ClientFixture f;
+    size_t n = 0;
+    for (const auto& r : http.snapshot())
+        if (r.url.endsWith("/oauth/token"))
+            ++n;
+    return n;
+}
+
+TEST_CASE("online_client: 401 forces one refresh and retries once with the new token")
+{
+    ClientFixture f; // the stored token has an hour left, so only a forced refresh can replace it
+    f.http.on("POST", api + "/oauth/token", [](const HttpRequest&) { return FakeHttp::json(200, refreshedTokens); });
     auto calls = std::make_shared<std::atomic<int>>(0);
     f.http.on("GET", api + "/user", [calls, body = fixture("user.json")](const HttpRequest&) {
         return ++*calls == 1 ? FakeHttp::json(401, "{}") : FakeHttp::json(200, body);
     });
     auto r = f.client->user();
     REQUIRE_FALSE(r.error);
-    REQUIRE(f.http.requestCount() == 2);
+    REQUIRE(refreshRequests(f.http) == 1);
+
+    std::vector<HttpRequest> gets;
+    for (const auto& req : f.http.snapshot())
+        if (req.url == api + "/user")
+            gets.push_back(req);
+    REQUIRE(gets.size() == 2);
+    REQUIRE(header(gets[0], "Authorization") == "Bearer AT");
+    REQUIRE(header(gets[1], "Authorization") == "Bearer NEW"); // re-sent, with the refreshed token
 }
 
 TEST_CASE("online_client: a second 401 is an error, not a loop")
 {
     ClientFixture f;
+    f.http.on("POST", api + "/oauth/token", [](const HttpRequest&) { return FakeHttp::json(200, refreshedTokens); });
     f.http.on("GET", api + "/user", [](const HttpRequest&) { return FakeHttp::json(401, "{}"); });
     auto r = f.client->user();
     REQUIRE(r.error);
     REQUIRE(r.error.message.contains("401"));
-    REQUIRE(f.http.requestCount() == 2);
+    REQUIRE(refreshRequests(f.http) == 1);
+    REQUIRE(f.http.requestCount() == 3); // GET, refresh, GET
 }
 
 TEST_CASE("online_client: 429 reports Retry-After and is not retried")
@@ -369,5 +392,66 @@ TEST_CASE("online_client: fetch never sends the token to another host and drops 
     REQUIRE(err.kind == ClientError::Kind::Forbidden);
     REQUIRE(header(f.http.snapshot()[0], "Authorization") == "");
     REQUIRE_FALSE(out.existsAsFile());
+    dir.deleteRecursively();
+}
+
+TEST_CASE("online_client: an IR tone makes one unfiltered models request and keeps every model")
+{
+    ClientFixture f;
+    f.serve("/tones/t_789", "tone_ir.json");
+    f.serve("/models?tone_id=t_789&page_size=300", "models_ir.json");
+    auto r = f.client->tone("t_789");
+    REQUIRE_FALSE(r.error);
+    auto reqs = f.http.snapshot();
+    REQUIRE(reqs.size() == 2);
+    REQUIRE(reqs[1].url == api + "/models?tone_id=t_789&page_size=300");
+    REQUIRE(r.value->format == "ir");
+    REQUIRE(r.value->models.size() == 1);
+    REQUIRE(r.value->models[0].id == "m_301");
+    REQUIRE(r.value->models[0].architecture == "");
+}
+
+TEST_CASE("online_client: fetch sends the token only to the same scheme, host and port")
+{
+    const juce::String bad[] = { "http://www.tone3000.com/api/v1/models/m_1/download",
+                                 "https://www.tone3000.com:8443/api/v1/models/m_1/download",
+                                 "https://tone3000.com.evil.test/m.nam" };
+    for (const auto& url : bad)
+    {
+        ClientFixture f;
+        f.http.on("GET", "", [](const HttpRequest&) { return FakeHttp::json(200, "x"); });
+        auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                       .getChildFile("amp_client_test_" + juce::String(juce::Random().nextInt64()));
+        dir.createDirectory();
+        f.client->fetch(url, dir.getChildFile("m.nam"), {}, {});
+        auto reqs = f.http.snapshot();
+        REQUIRE(reqs.size() == 1);
+        REQUIRE(header(reqs[0], "Authorization") == "");
+        dir.deleteRecursively();
+    }
+
+    ClientFixture f; // explicit default port on the same origin still counts as ours
+    f.http.on("GET", "", [](const HttpRequest&) { return FakeHttp::json(200, "x"); });
+    auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                   .getChildFile("amp_client_test_" + juce::String(juce::Random().nextInt64()));
+    dir.createDirectory();
+    f.client->fetch("https://www.tone3000.com:443/api/v1/models/m_1/download", dir.getChildFile("m.nam"), {}, {});
+    REQUIRE(header(f.http.snapshot()[0], "Authorization") == "Bearer AT");
+    dir.deleteRecursively();
+}
+
+TEST_CASE("online_client: fetch reports a 429 with Retry-After and does not retry")
+{
+    ClientFixture f;
+    juce::StringPairArray headers;
+    headers.set("Retry-After", "11");
+    f.http.on("GET", api + "/models/", [headers](const HttpRequest&) { return FakeHttp::json(429, "slow", headers); });
+    auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                   .getChildFile("amp_client_test_" + juce::String(juce::Random().nextInt64()));
+    dir.createDirectory();
+    auto err = f.client->fetch(api + "/models/m_1/download", dir.getChildFile("m.nam"), {}, {});
+    REQUIRE(err.kind == ClientError::Kind::RateLimited);
+    REQUIRE(err.retryAfterSec == 11);
+    REQUIRE(f.http.requestCount() == 1);
     dir.deleteRecursively();
 }

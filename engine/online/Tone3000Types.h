@@ -72,6 +72,9 @@ juce::var toVar(const UserRef&);
 juce::var toVar(const ToneSummary&);
 juce::var toVar(const Tone&);
 
+// A JSON number as int, or `fallback` for anything else.
+int jsonInt(const juce::var&, int fallback = 0);
+
 // Missing or mistyped fields become "" / 0; ids may arrive as numbers or strings and are stored as strings.
 UserRef parseUser(const juce::var&);
 ToneSummary parseToneSummary(const juce::var&);

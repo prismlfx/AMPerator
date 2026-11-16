@@ -28,9 +28,16 @@ juce::var dataArray(const juce::var& v)
     return v.getProperty("data", {});
 }
 
-int intOr(const juce::var& v, int fallback)
+int effectivePort(const juce::URL& u)
 {
-    return v.isInt() || v.isInt64() || v.isDouble() ? static_cast<int>(static_cast<juce::int64>(v)) : fallback;
+    return u.getPort() > 0 ? u.getPort() : (u.getScheme().equalsIgnoreCase("https") ? 443 : 80);
+}
+
+// The token goes only to the configured origin: same scheme (never cleartext http), host and port.
+bool sameOrigin(const juce::URL& a, const juce::URL& b)
+{
+    return a.getScheme().equalsIgnoreCase(b.getScheme()) && a.getDomain().equalsIgnoreCase(b.getDomain())
+           && effectivePort(a) == effectivePort(b);
 }
 
 juce::String escaped(const juce::String& s) { return juce::URL::addEscapeChars(s, true); }
@@ -53,7 +60,7 @@ Tone3000Client::Reply Tone3000Client::send(HttpRequest req, bool authorize)
         if (authorize)
         {
             juce::String tokenError;
-            const auto token = auth.accessToken(tokenError);
+            const auto token = auth.accessToken(tokenError, retried); // the 401 retry forces a refresh
             if (token.isEmpty())
             {
                 reply.error = tokenError.containsIgnoreCase("signed")
@@ -75,7 +82,7 @@ Tone3000Client::Reply Tone3000Client::send(HttpRequest req, bool authorize)
             reply.error = makeError(ClientError::Kind::Network, r.error);
         else if (r.status == 401 && authorize && ! retried)
         {
-            retried = true; // one more accessToken call and one retry, never more
+            retried = true; // one forced refresh and one retry, never more
             continue;
         }
         else if (r.status == 429)
@@ -140,8 +147,8 @@ Result<Page> Tone3000Client::list(const juce::String& kind, int page)
             result.tones.push_back(parseToneSummary(item));
     if (paged)
     {
-        result.page = juce::jmax(1, intOr(json.getProperty("page", {}), pageNumber));
-        result.totalPages = juce::jmax(1, intOr(json.getProperty("total_pages", {}), 1));
+        result.page = juce::jmax(1, jsonInt(json.getProperty("page", {}), pageNumber));
+        result.totalPages = juce::jmax(1, jsonInt(json.getProperty("total_pages", {}), 1));
     }
     out.value = std::move(result);
     return out;
@@ -159,11 +166,20 @@ Result<Tone> Tone3000Client::tone(const juce::String& id)
     if (result.id.isEmpty())
         result.id = id;
 
-    // A2 models only come back when asked for explicitly, so ask for A2 first and then A1.
-    for (const char* architecture : { "2", "1" })
+    // Only the first page (page_size=300) is read; a tone has far fewer models than that.
+    // NAM: A2 models only come back when asked for explicitly, so ask for A2 first and then A1. Other formats (IR)
+    // have a null architecture_version and the filter's effect on them is undocumented: one unfiltered request.
+    std::vector<juce::String> queries;
+    const auto prefix = "/models?tone_id=" + escaped(id);
+    if (result.format == "nam")
+        queries = { prefix + "&architecture=2&page_size=300", prefix + "&architecture=1&page_size=300" };
+    else
+        queries = { prefix + "&page_size=300" };
+
+    for (const auto& query : queries)
     {
         juce::var models;
-        out.error = getJson("/models?tone_id=" + escaped(id) + "&architecture=" + architecture + "&page_size=300", models).error;
+        out.error = getJson(query, models).error;
         if (out.error)
             return out;
 
@@ -208,7 +224,7 @@ ClientError Tone3000Client::fetch(const juce::String& url, const juce::File& to,
     req.timeoutMs = 120000;
 
     // Never leak the token to another host.
-    const bool ours = juce::URL(url).getDomain().equalsIgnoreCase(juce::URL(base).getDomain());
+    const bool ours = sameOrigin(juce::URL(url), juce::URL(base));
     auto reply = send(std::move(req), ours);
 
     if (reply.error && reply.response.status != 0)

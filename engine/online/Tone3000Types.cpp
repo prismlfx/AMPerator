@@ -23,11 +23,7 @@ juce::String text(const juce::var& v)
 
 juce::String field(const juce::var& obj, const char* name) { return text(obj.getProperty(name, {})); }
 
-int count(const juce::var& obj, const char* name)
-{
-    const auto v = obj.getProperty(name, {});
-    return v.isInt() || v.isInt64() || v.isDouble() ? static_cast<int>(static_cast<juce::int64>(v)) : 0;
-}
+int count(const juce::var& obj, const char* name) { return jsonInt(obj.getProperty(name, {})); }
 
 // An array of strings or of {name} objects.
 juce::StringArray names(const juce::var& v)
@@ -69,6 +65,11 @@ juce::var stringArrayVar(const juce::StringArray& list)
     return out;
 }
 } // namespace
+
+int jsonInt(const juce::var& v, int fallback)
+{
+    return v.isInt() || v.isInt64() || v.isDouble() ? static_cast<int>(static_cast<juce::int64>(v)) : fallback;
+}
 
 juce::var toVar(const UserRef& u)
 {
