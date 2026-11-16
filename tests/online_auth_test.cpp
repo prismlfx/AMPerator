@@ -245,25 +245,212 @@ TEST_CASE("online_auth: refresh keeps the old refresh token when none is rotated
     REQUIRE(juce::JSON::parse(*store.get("tokens"))["refresh"].toString() == "R");
 }
 
+namespace
+{
+// Holds a handler until the test opens the gate, so concurrent callers are certain to overlap.
+struct Gate
+{
+    std::atomic<bool> open { false };
+    std::atomic<int> entered { 0 };
+    void wait()
+    {
+        ++entered;
+        while (! open)
+            juce::Thread::sleep(2);
+    }
+    void waitEntered(int n)
+    {
+        while (entered < n)
+            juce::Thread::sleep(2);
+    }
+};
+
+const char* const expiredTokens = R"({"access":"A","refresh":"R","expiresAtMs":1000})";
+const char* const tokenUrl = "https://www.tone3000.com/api/v1/oauth/token";
+
+// Spawns n callers and lets them all reach accessToken before the gate opens.
+template <typename Fn>
+void runConcurrently(int n, Gate& gate, Fn fn)
+{
+    std::vector<std::thread> threads;
+    for (int i = 0; i < n; ++i)
+        threads.emplace_back(fn, i);
+    gate.waitEntered(1); // the first caller is inside the fake transport
+    juce::Thread::sleep(80); // the others have had time to queue on the refresh lock
+    gate.open = true;
+    for (auto& t : threads)
+        t.join();
+}
+} // namespace
+
 TEST_CASE("online_auth: refresh is single-flight")
 {
     FakeHttp http;
     MemorySecureStore store;
-    store.set("tokens", R"({"access":"A","refresh":"R","expiresAtMs":1000})");
-    http.on("POST", "https://www.tone3000.com/", [](const HttpRequest&) {
-        juce::Thread::sleep(100);
+    Gate gate;
+    store.set("tokens", expiredTokens);
+    http.on("POST", tokenUrl, [&](const HttpRequest&) {
+        gate.wait();
         return FakeHttp::json(200, R"({"access_token":"A2","refresh_token":"R2","expires_in":3600})");
     });
     Tone3000Auth auth({ "cid" }, http, store, [] { return juce::int64(2000); });
 
-    juce::String e1, e2, t1, t2;
-    std::thread a([&] { t1 = auth.accessToken(e1); });
-    std::thread b([&] { t2 = auth.accessToken(e2); });
-    a.join();
-    b.join();
-    REQUIRE(t1 == "A2");
-    REQUIRE(t2 == "A2");
+    juce::String e[2], t[2];
+    runConcurrently(2, gate, [&](int i) { t[i] = auth.accessToken(e[i]); });
+    REQUIRE(t[0] == "A2");
+    REQUIRE(t[1] == "A2");
     REQUIRE(http.requestCount() == 1);
+}
+
+TEST_CASE("online_auth: forced refresh refreshes with plenty of life left")
+{
+    FakeHttp http;
+    MemorySecureStore store;
+    store.set("tokens", R"({"access":"A","refresh":"R","expiresAtMs":3601000})");
+    http.on("POST", tokenUrl, [](const HttpRequest&) {
+        return FakeHttp::json(200, R"({"access_token":"A2","refresh_token":"R2","expires_in":3600})");
+    });
+    Tone3000Auth auth({ "cid" }, http, store, [] { return juce::int64(1000); });
+    juce::String err;
+    REQUIRE(auth.accessToken(err) == "A");
+    REQUIRE(http.requestCount() == 0);
+    REQUIRE(auth.accessToken(err, true) == "A2");
+    REQUIRE(http.requestCount() == 1);
+}
+
+TEST_CASE("online_auth: concurrent forced refreshes are single-flight")
+{
+    FakeHttp http;
+    MemorySecureStore store;
+    Gate gate;
+    store.set("tokens", R"({"access":"A","refresh":"R","expiresAtMs":3601000})");
+    http.on("POST", tokenUrl, [&](const HttpRequest&) {
+        gate.wait();
+        return FakeHttp::json(200, R"({"access_token":"A2","refresh_token":"R2","expires_in":3600})");
+    });
+    Tone3000Auth auth({ "cid" }, http, store, [] { return juce::int64(1000); });
+    juce::String e[2], t[2];
+    runConcurrently(2, gate, [&](int i) { t[i] = auth.accessToken(e[i], true); });
+    REQUIRE(t[0] == "A2");
+    REQUIRE(t[1] == "A2");
+    REQUIRE(http.requestCount() == 1);
+}
+
+TEST_CASE("online_auth: concurrent invalid_grant sends one request and signs out once")
+{
+    FakeHttp http;
+    MemorySecureStore store;
+    Gate gate;
+    store.set("tokens", expiredTokens);
+    http.on("POST", tokenUrl, [&](const HttpRequest&) {
+        gate.wait();
+        return FakeHttp::json(400, R"({"error":"invalid_grant"})");
+    });
+    Tone3000Auth auth({ "cid" }, http, store, [] { return juce::int64(2000); });
+    std::atomic<int> signedOut { 0 };
+    auth.onSignedOut = [&] { ++signedOut; };
+
+    juce::String e[2], t[2];
+    runConcurrently(2, gate, [&](int i) { t[i] = auth.accessToken(e[i]); });
+    REQUIRE(t[0].isEmpty());
+    REQUIRE(t[1].isEmpty());
+    REQUIRE(e[0] == "signed out");
+    REQUIRE(e[1] == "signed out");
+    REQUIRE(http.requestCount() == 1);
+    REQUIRE(signedOut == 1);
+    REQUIRE_FALSE(auth.isConnected());
+}
+
+TEST_CASE("online_auth: a refresh finishing after sign-out does not resurrect the tokens")
+{
+    FakeHttp http;
+    MemorySecureStore store;
+    Gate gate;
+    store.set("tokens", expiredTokens);
+    http.on("POST", tokenUrl, [&](const HttpRequest&) {
+        gate.wait();
+        return FakeHttp::json(200, R"({"access_token":"A2","refresh_token":"R2","expires_in":3600})");
+    });
+    Tone3000Auth auth({ "cid" }, http, store, [] { return juce::int64(2000); });
+    juce::String err, token;
+    std::thread worker([&] { token = auth.accessToken(err); });
+    gate.waitEntered(1);
+    auth.clear();
+    gate.open = true;
+    worker.join();
+    REQUIRE(token.isEmpty());
+    REQUIRE_FALSE(auth.isConnected());
+}
+
+TEST_CASE("online_auth: a refresh success does not overwrite a newer sign-in")
+{
+    FakeHttp http;
+    MemorySecureStore store;
+    Gate gate;
+    store.set("tokens", expiredTokens);
+    http.on("POST", tokenUrl, [&](const HttpRequest& r) {
+        if (pkce::parseQuery(r.body)["grant_type"] == "refresh_token")
+        {
+            gate.wait();
+            return FakeHttp::json(200, R"({"access_token":"OLD2","refresh_token":"OLDR2","expires_in":3600})");
+        }
+        return FakeHttp::json(200, R"({"access_token":"NEW","refresh_token":"NEWR","expires_in":3600})");
+    });
+    Tone3000Auth auth({ "cid" }, http, store, [] { return juce::int64(2000); });
+    juce::String err, token;
+    std::thread worker([&] { token = auth.accessToken(err); });
+    gate.waitEntered(1);
+    auth.clear();
+    auto s = auth.begin();
+    REQUIRE(auth.complete("code=c&state=" + s.state).signedIn);
+    gate.open = true;
+    worker.join();
+    REQUIRE(juce::JSON::parse(*store.get("tokens"))["access"].toString() == "NEW");
+    REQUIRE(token == "NEW");
+}
+
+TEST_CASE("online_auth: a refresh revoked after a newer sign-in leaves the new tokens alone")
+{
+    FakeHttp http;
+    MemorySecureStore store;
+    Gate gate;
+    store.set("tokens", expiredTokens);
+    http.on("POST", tokenUrl, [&](const HttpRequest& r) {
+        if (pkce::parseQuery(r.body)["grant_type"] == "refresh_token")
+        {
+            gate.wait();
+            return FakeHttp::json(400, R"({"error":"invalid_grant"})");
+        }
+        return FakeHttp::json(200, R"({"access_token":"NEW","refresh_token":"NEWR","expires_in":3600})");
+    });
+    Tone3000Auth auth({ "cid" }, http, store, [] { return juce::int64(2000); });
+    std::atomic<int> signedOut { 0 };
+    auth.onSignedOut = [&] { ++signedOut; };
+    juce::String err, token;
+    std::thread worker([&] { token = auth.accessToken(err); });
+    gate.waitEntered(1);
+    auth.clear(); // signedOut == 1
+    auto s = auth.begin();
+    REQUIRE(auth.complete("code=c&state=" + s.state).signedIn);
+    gate.open = true;
+    worker.join();
+    REQUIRE(auth.isConnected());
+    REQUIRE(juce::JSON::parse(*store.get("tokens"))["access"].toString() == "NEW");
+    REQUIRE(signedOut == 1); // only the explicit clear()
+}
+
+TEST_CASE("online_auth: begin ignores extra params that collide with the OAuth ones")
+{
+    AuthFixture f;
+    juce::StringPairArray extra;
+    extra.set("client_id", "evil");
+    extra.set("state", "forged");
+    extra.set("tone_id", "t1");
+    auto start = f.auth->begin(extra);
+    auto q = pkce::parseQuery(start.url);
+    REQUIRE(q["client_id"] == "cid");
+    REQUIRE(q["state"] == start.state);
+    REQUIRE(q["tone_id"] == "t1");
 }
 
 TEST_CASE("online_auth: invalid_grant signs out")

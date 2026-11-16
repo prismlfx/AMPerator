@@ -104,8 +104,11 @@ AuthStart Tone3000Auth::begin(const juce::StringPairArray& extraParams)
     q.set("code_challenge", pkce::challengeFor(verifier));
     q.set("code_challenge_method", "S256");
     q.set("state", state);
+    static const juce::StringArray reserved { "response_type", "client_id", "redirect_uri", "scope", "code_challenge",
+                                              "code_challenge_method", "state" };
     for (int i = 0; i < extraParams.size(); ++i)
-        q.set(extraParams.getAllKeys()[i], extraParams.getAllValues()[i]);
+        if (! reserved.contains(extraParams.getAllKeys()[i]))
+            q.set(extraParams.getAllKeys()[i], extraParams.getAllValues()[i]);
 
     {
         const juce::ScopedLock lock(pendingLock);
@@ -159,16 +162,20 @@ CallbackResult Tone3000Auth::complete(const juce::String& query)
     }
     else if (! parseTokens(response.body, {}, tokens))
         result.error = "token response not understood";
-    else if (! saveTokens(tokens))
-        result.error = "could not store tokens";
     else
-        result.signedIn = true;
+    {
+        const juce::ScopedLock state(stateLock);
+        if (! saveTokens(tokens))
+            result.error = "could not store tokens";
+        else
+            result.signedIn = true;
+    }
     return result;
 }
 
 bool Tone3000Auth::isConnected() const { return loadTokens().has_value(); }
 
-juce::String Tone3000Auth::accessToken(juce::String& error)
+juce::String Tone3000Auth::accessToken(juce::String& error, bool forceRefresh)
 {
     error = {};
     auto tokens = loadTokens();
@@ -177,10 +184,11 @@ juce::String Tone3000Auth::accessToken(juce::String& error)
         error = "not signed in";
         return {};
     }
-    if (tokens->expiresAtMs - now() >= refreshMarginMs)
+    if (! forceRefresh && tokens->expiresAtMs - now() >= refreshMarginMs)
         return tokens->access;
+    const auto enteredWith = tokens->access;
 
-    bool signOut = false;
+    bool signedOut = false;
     juce::String result;
     {
         const juce::ScopedLock refresh(refreshLock); // later callers wait here, then find fresh tokens
@@ -190,11 +198,15 @@ juce::String Tone3000Auth::accessToken(juce::String& error)
             error = "signed out";
             return {};
         }
-        if (tokens->expiresAtMs - now() >= refreshMarginMs)
+        if (forceRefresh ? tokens->access != enteredWith : tokens->expiresAtMs - now() >= refreshMarginMs)
             return tokens->access;
 
         if (tokens->refresh.isEmpty())
-            signOut = true;
+        {
+            const juce::ScopedLock state(stateLock);
+            signedOut = removeIfStillHolding(tokens->refresh);
+            error = "signed out";
+        }
         else
         {
             juce::StringPairArray form;
@@ -203,39 +215,65 @@ juce::String Tone3000Auth::accessToken(juce::String& error)
             form.set("client_id", config.clientId);
             const auto response = http.request(formPost(authUrl("token"), form));
 
+            Tokens fresh;
+            bool revoked = false, parsed = false;
             if (! response.error.isEmpty())
                 error = response.error;
             else if (response.status == 400 || response.status == 401 || errorOf(response.body) == "invalid_grant")
-                signOut = true;
+                revoked = true;
             else if (! response.ok())
                 error = "token refresh failed (HTTP " + juce::String(response.status) + ")";
+            else if (! parseTokens(response.body, tokens->refresh, fresh))
+                error = "token response not understood";
             else
+                parsed = true;
+
+            if (revoked || parsed)
             {
-                Tokens fresh;
-                if (! parseTokens(response.body, tokens->refresh, fresh))
-                    error = "token response not understood";
-                else if (! store.get(tokensKey)) // signed out while the request was in flight
+                // Only touch the store if it still holds the tokens this refresh started from: the user may have
+                // signed out, or in again, while the request was in flight.
+                const juce::ScopedLock state(stateLock);
+                const auto stored = loadTokens();
+                if (! stored)
                     error = "signed out";
-                else if (! saveTokens(fresh))
-                    error = "could not store tokens";
-                else
+                else if (stored->refresh != tokens->refresh)
+                    result = stored->access; // a newer sign-in won; use it, leave it alone
+                else if (revoked)
+                {
+                    store.remove(tokensKey);
+                    signedOut = true;
+                    error = "signed out";
+                }
+                else if (saveTokens(fresh))
                     result = fresh.access;
+                else
+                    error = "could not store tokens";
             }
         }
     }
-    if (signOut)
-    {
-        clear(); // outside the refresh lock so onSignedOut never runs under one
-        error = "signed out";
-        return {};
-    }
+    if (signedOut && onSignedOut)
+        onSignedOut(); // outside every lock
     return result;
+}
+
+// Caller holds stateLock. Removes the tokens when they still carry `refresh`; true if it removed them.
+bool Tone3000Auth::removeIfStillHolding(const juce::String& refresh)
+{
+    const auto stored = loadTokens();
+    if (! stored || stored->refresh != refresh)
+        return false;
+    store.remove(tokensKey);
+    return true;
 }
 
 void Tone3000Auth::clear()
 {
-    const bool was = store.get(tokensKey).has_value();
-    store.remove(tokensKey);
+    bool was;
+    {
+        const juce::ScopedLock state(stateLock);
+        was = loadTokens().has_value();
+        store.remove(tokensKey);
+    }
     if (was && onSignedOut)
         onSignedOut();
 }

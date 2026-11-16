@@ -4,6 +4,7 @@
 // begin / isConnected / clear are message-thread calls; complete / accessToken block and run on workers.
 
 #include <functional>
+#include <optional>
 
 #include <juce_core/juce_core.h>
 
@@ -46,11 +47,15 @@ public:
     CallbackResult complete(const juce::String& query);
     bool isConnected() const;
     // Valid access token, refreshing when under 60 s remain (single-flight). "" + error on failure. Blocking.
-    juce::String accessToken(juce::String& error);
+    // forceRefresh (for a 401 retry): refresh even with plenty of life left. Still single-flight: a forced caller
+    // that waited for another refresh and finds the stored access token changed since it entered returns the new
+    // one without refreshing again. Extra begin() params that collide with the OAuth ones are ignored.
+    juce::String accessToken(juce::String& error, bool forceRefresh = false);
     // Removes the stored tokens; fires onSignedOut if they were present.
     void clear();
 
-    std::function<void()> onSignedOut; // any thread, never invoked under a lock
+    // Any thread, never invoked under a lock. Set it before the first worker call (it is not synchronised).
+    std::function<void()> onSignedOut;
 
 private:
     juce::int64 now() const;
@@ -58,6 +63,7 @@ private:
     bool saveTokens(const Tokens&);
     // Parses a token endpoint body; keepRefresh is used when the response carries no refresh_token.
     bool parseTokens(const juce::String& body, const juce::String& keepRefresh, Tokens& out) const;
+    bool removeIfStillHolding(const juce::String& refresh);
     juce::String authUrl(const juce::String& path) const;
 
     AuthConfig config;
@@ -67,6 +73,7 @@ private:
 
     juce::CriticalSection pendingLock; // guards state / verifier only; never held across network I/O
     juce::String pendingState, pendingVerifier;
-    juce::CriticalSection refreshLock; // makes refresh single-flight
+    juce::CriticalSection refreshLock; // makes refresh single-flight (held across the refresh request)
+    juce::CriticalSection stateLock;   // short, no I/O beyond the store: every read-modify-write of "tokens"
 };
 } // namespace amp::online
