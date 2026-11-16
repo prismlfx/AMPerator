@@ -14,9 +14,24 @@ constexpr int maxBytes = 100;
 const juce::String separator { juce::CharPointer_UTF8(" \xe2\x80\x94 ") };
 
 // Sanitized, at most 80 characters and 100 UTF-8 bytes, without trailing spaces or dots.
-juce::String component(const juce::String& raw)
+bool isReservedDeviceName(const juce::String& s)
+{
+    // Windows device names, with or without an extension ("CON", "con.txt"); refused on every platform because
+    // libraries move between machines.
+    const auto base = s.upToFirstOccurrenceOf(".", false, false).trimEnd().toUpperCase();
+    if (base == "CON" || base == "PRN" || base == "AUX" || base == "NUL")
+        return true;
+    return (base.startsWith("COM") || base.startsWith("LPT")) && base.length() == 4 && base[3] >= '1' && base[3] <= '9';
+}
+
+juce::String component(const juce::String& raw, bool isDirectory = false)
 {
     auto s = RigStore::sanitizeFileName(raw);
+    // juce::File::getChildFile treats a leading "~" as an absolute (home-relative) path on macOS and Linux.
+    if (s.startsWithChar('~'))
+        s = "_" + s.substring(1);
+    if (isDirectory && isReservedDeviceName(s))
+        s = "_" + s;
     if (s.length() > maxChars)
         s = s.substring(0, maxChars);
     while (s.getNumBytesAsUTF8() > static_cast<size_t>(maxBytes))
@@ -60,10 +75,19 @@ juce::String validateAssetFile(const juce::File& file, const juce::String& forma
 juce::File placementFor(const juce::File& libraryRoot, const Provenance& p)
 {
     const bool nam = p.format == "nam";
-    const auto creator = p.creator.username.trim().isEmpty() ? juce::String("unknown") : component(p.creator.username);
-    const auto name = component(p.title) + separator + component(p.modelName) + (nam ? ".nam" : ".wav");
-    return libraryRoot.getChildFile(nam ? "Models" : "IRs").getChildFile("TONE3000").getChildFile(creator)
-        .getChildFile(name);
+    const auto base = libraryRoot.getChildFile(nam ? "Models" : "IRs").getChildFile("TONE3000");
+    const auto ext = nam ? ".nam" : ".wav";
+
+    const auto build = [&](const juce::String& creator, const juce::String& title, const juce::String& model)
+    { return base.getChildFile(creator).getChildFile(title + separator + model + ext); };
+
+    const auto creator = p.creator.username.trim().isEmpty() ? juce::String("unknown")
+                                                             : component(p.creator.username, true);
+    auto result = build(creator, component(p.title), component(p.modelName));
+    // Belt and braces: whatever the inputs were, the result is <base>/<creator>/<file>.
+    if (result.getParentDirectory().getParentDirectory() != base || ! result.isAChildOf(base))
+        result = build("Untitled", "Untitled", "Untitled");
+    return result;
 }
 
 juce::File placeFile(const juce::File& partial, const juce::File& target, const juce::String& sha256,

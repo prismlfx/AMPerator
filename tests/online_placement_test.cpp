@@ -162,3 +162,45 @@ TEST_CASE("online_placement: validateAssetFile accepts real assets and rejects m
     empty.replaceWithText("");
     CHECK(validateAssetFile(empty, "ir") == "not a valid ir file");
 }
+
+TEST_CASE("online_placement: hostile names stay inside the TONE3000 folder", "[online]")
+{
+    TempDir t;
+    const auto base = t.dir.getChildFile("Models/TONE3000");
+    const juce::String values[] = { "..", ".", "~", "~root", "~/x", "", "   ", "/etc/passwd", "a/../../b", "C:\\x",
+                                    ".hidden", "name.", "line\nbreak", juce::String("nul") + juce::String::charToString(0) + "x",
+                                    "CON", "con.txt", "NUL", "aux", "PRN", "COM1", "lpt9", "COM0", "Com5.x" };
+    for (auto& v : values)
+    {
+        INFO("value: " << v.replace("\n", "\\n"));
+        for (int which = 0; which < 3; ++which)
+        {
+            Provenance p = prov(which == 0 ? v : "jane", which == 1 ? v : "Amp", which == 2 ? v : "Std");
+            const auto f = placementFor(t.dir, p);
+            CHECK(f.isAChildOf(base));
+            CHECK(f.getParentDirectory().getParentDirectory() == base);
+            CHECK(f.getFileExtension() == ".nam");
+            CHECK(f.getFileName().isNotEmpty());
+        }
+    }
+    // Nothing was created by placementFor, so nothing can exist outside the temp dir through it.
+    CHECK(! base.exists());
+    CHECK(placementFor(t.dir, prov("~", "a", "b")).getParentDirectory().getFileName() == "_");
+    CHECK(placementFor(t.dir, prov("~root", "a", "b")).getParentDirectory().getFileName() == "_root");
+    CHECK(placementFor(t.dir, prov("~", "~x", "b")).getFileName().startsWith("_x"));
+}
+
+TEST_CASE("online_placement: Windows device names are prefixed", "[online]")
+{
+    TempDir t;
+    for (auto n : { "CON", "con", "NUL", "AUX", "PRN", "COM1", "COM9", "LPT1", "lpt9", "CON.x", "com3.tar" })
+    {
+        INFO(n);
+        CHECK(placementFor(t.dir, prov(n, "a", "b")).getParentDirectory().getFileName().startsWithChar('_'));
+    }
+    for (auto n : { "COM0", "COM10", "CONSOLE", "AUXILIARY", "LPT" })
+    {
+        INFO(n);
+        CHECK(placementFor(t.dir, prov(n, "a", "b")).getParentDirectory().getFileName() == n);
+    }
+}

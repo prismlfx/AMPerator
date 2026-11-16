@@ -39,11 +39,13 @@ public:
 
     void put(const juce::String& sha256, Provenance); // the key is stored lower-case
     std::optional<Provenance> bySha(const juce::String& sha256) const;
+    // With several files for one model id, the one with the newest downloadedAt.
     std::optional<juce::String> shaForModel(const juce::String& modelId) const;
     size_t size() const;
 
 private:
     juce::File file;
     std::map<juce::String, Provenance> entries;
+    bool keepFileOnSave = false; // an unreadable file could not be set aside; save() refuses to replace it
 };
 } // namespace amp::online

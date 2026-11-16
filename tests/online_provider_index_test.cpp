@@ -132,3 +132,30 @@ TEST_CASE("online_provider_index: toVar builds the bridge source object", "[onli
     CHECK(v.getProperty("url", {}).toString() == "https://www.tone3000.com/tones/t_456");
     CHECK(v.getProperty("image", {}).toString() == "tone3000/t_456.jpg");
 }
+
+TEST_CASE("online_provider_index: shaForModel prefers the newest download", "[online]")
+{
+    TempDir t;
+    ProviderIndex idx(t.dir.getChildFile("index.json"));
+    auto older = sample();
+    older.downloadedAt = "2026-01-01T00:00:00Z";
+    auto newer = sample();
+    newer.downloadedAt = "2026-06-01T00:00:00Z";
+    idx.put("zz", older);
+    idx.put("aa", newer); // sorts before "zz": the winner is not simply the first or last key
+    CHECK(idx.shaForModel("m_123") == juce::String("aa"));
+}
+
+TEST_CASE("online_provider_index: save never overwrites a corrupt file that could not be set aside", "[online]")
+{
+    TempDir t;
+    const auto f = t.dir.getChildFile("index.json");
+    f.replaceWithText("{ broken");
+    // Occupy the .corrupt name with a directory: neither move nor copy can use it, but the next suffix is free,
+    // so the bytes still get preserved.
+    t.dir.getChildFile("index.json.corrupt").createDirectory();
+    ProviderIndex idx(f);
+    idx.load();
+    CHECK(idx.size() == 0);
+    CHECK(t.dir.getChildFile("index.json.corrupt.2").loadFileAsString() == "{ broken");
+}

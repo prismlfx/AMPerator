@@ -88,6 +88,7 @@ ProviderIndex::ProviderIndex(juce::File indexFile) : file(std::move(indexFile)) 
 void ProviderIndex::load()
 {
     entries.clear();
+    keepFileOnSave = false;
     if (! file.existsAsFile())
         return;
 
@@ -103,12 +104,13 @@ void ProviderIndex::load()
     auto kept = file.getSiblingFile(file.getFileName() + ".corrupt");
     for (int n = 2; kept.exists(); ++n)
         kept = file.getSiblingFile(file.getFileName() + ".corrupt." + juce::String(n));
-    file.moveFileTo(kept);
+    if (! file.moveFileTo(kept) && ! file.copyFileTo(kept))
+        keepFileOnSave = true; // could not preserve the bytes: save() must not overwrite them
 }
 
 bool ProviderIndex::save() const
 {
-    if (! file.getParentDirectory().createDirectory())
+    if (keepFileOnSave || ! file.getParentDirectory().createDirectory())
         return false;
     auto* o = new juce::DynamicObject();
     for (auto& [sha, p] : entries)
@@ -130,10 +132,14 @@ std::optional<juce::String> ProviderIndex::shaForModel(const juce::String& model
 {
     if (modelId.isEmpty())
         return std::nullopt;
-    for (auto& [sha, p] : entries)
-        if (p.modelId == modelId)
-            return sha;
-    return std::nullopt;
+    // Several files can carry one model id (a name clash numbered a re-download); the newest download wins.
+    const std::pair<const juce::String, Provenance>* best = nullptr;
+    for (auto& e : entries)
+        if (e.second.modelId == modelId && (best == nullptr || e.second.downloadedAt > best->second.downloadedAt))
+            best = &e;
+    if (best == nullptr)
+        return std::nullopt;
+    return best->first;
 }
 
 size_t ProviderIndex::size() const { return entries.size(); }
