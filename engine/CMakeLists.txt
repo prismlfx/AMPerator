@@ -37,6 +37,8 @@ add_library(amp_engine STATIC
   control/MidiControl.h
   assets/AssetIndex.cpp
   assets/AssetIndex.h
+  online/DownloadManager.cpp
+  online/DownloadManager.h
   online/HttpTransport.h
   online/Placement.cpp
   online/Placement.h
