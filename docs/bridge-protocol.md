@@ -88,7 +88,9 @@ fields are ignored), and only the PluginRef fields are written to rig files.
 
 **Settings**: `{audioDeviceType, audioDeviceName, inputChannel, outputFirstChannel, sampleRate, bufferSize,
 watchedFolders: [path], globalMappings: [{control, action, node}], footswitchKeys: {"0x04": "footswitch:L", ...},
-footswitchDevice: {vid, pid} | null}` (`footswitchDevice`: a keyboard the user picked as the footswitch; it is opened in
+footswitchDevice: {vid, pid} | null, tone3000AutoFetch: bool, tone3000ClientId: string}` (`tone3000AutoFetch`: download
+a missing TONE3000 model when a rig needing it loads, only while connected; `tone3000ClientId`: TONE3000 publishable key,
+trimmed, overrides the compiled-in `AMP_TONE3000_CLIENT_ID`, empty = use the compiled-in one; `footswitchDevice`: a keyboard the user picked as the footswitch; it is opened in
 addition to the automatically recognised models — no other keyboard is ever grabbed. `setSettings` takes `{vid, pid}`
 (16-bit ids) or `null` to clear.)
 (+ in `getSettings`/`setSettings` results: `availableDevices: [name]`, `availableSampleRates: [hz]`,

@@ -10,6 +10,11 @@ juce::String engineVersion()
     return "0.1.0";
 }
 
+juce::String compiledTone3000ClientId()
+{
+    return AMP_TONE3000_CLIENT_ID;
+}
+
 namespace
 {
 juce::String deviceStatusName(DeviceStatus s)

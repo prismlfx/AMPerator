@@ -15,6 +15,12 @@ juce::String readString(const juce::var& obj, const char* key, const juce::Strin
     return v.isString() ? v.toString() : def;
 }
 
+bool readBool(const juce::var& obj, const char* key, bool def)
+{
+    auto v = obj.getProperty(key, juce::var());
+    return v.isBool() ? static_cast<bool>(v) : def;
+}
+
 bool isNumber(const juce::var& v) { return v.isInt() || v.isInt64() || v.isDouble(); }
 
 double readDouble(const juce::var& obj, const char* key, double def, double lo, double hi)
@@ -113,6 +119,8 @@ Settings Settings::load(const juce::File& file)
     s.favoriteRigIds = readStrings(root, "favoriteRigIds");
     trimRecent(s.recentRigIds);
     s.footswitchKeys = readFootswitchKeys(root, s.footswitchKeys);
+    s.tone3000AutoFetch = readBool(root, "tone3000AutoFetch", s.tone3000AutoFetch);
+    s.tone3000ClientId = readString(root, "tone3000ClientId", s.tone3000ClientId).trim();
 
     if (auto* dev = root.getProperty("footswitchDevice", juce::var()).getDynamicObject())
     {
@@ -149,6 +157,8 @@ bool Settings::save(const juce::File& file) const
     obj->setProperty("lastRigId", lastRigId);
     obj->setProperty("recentRigIds", toVarArray(recentRigIds));
     obj->setProperty("favoriteRigIds", toVarArray(favoriteRigIds));
+    obj->setProperty("tone3000AutoFetch", tone3000AutoFetch);
+    obj->setProperty("tone3000ClientId", tone3000ClientId);
 
     juce::Array<juce::var> maps;
     for (auto& m : globalMappings)

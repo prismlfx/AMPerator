@@ -77,6 +77,8 @@ add_library(amp_engine STATIC
 
 target_include_directories(amp_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(amp_engine PUBLIC cxx_std_20)
+set(AMP_TONE3000_CLIENT_ID "" CACHE STRING "TONE3000 publishable key (OAuth client id)")
+target_compile_definitions(amp_engine PUBLIC AMP_TONE3000_CLIENT_ID="${AMP_TONE3000_CLIENT_ID}")
 target_link_libraries(amp_engine PUBLIC
   amp_juce # JUCE modules + JUCE_* options (cmake/AmpJuce.cmake)
   PRIVATE

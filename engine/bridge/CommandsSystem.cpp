@@ -185,6 +185,10 @@ CommandResult Engine::setSettings(const SettingsPatch& p)
         settings.footswitchDevice = *p.footswitchDevice;
         hid.setUserDevice(settings.footswitchDevice);
     }
+    if (p.tone3000AutoFetch)
+        settings.tone3000AutoFetch = *p.tone3000AutoFetch;
+    if (p.tone3000ClientId)
+        settings.tone3000ClientId = *p.tone3000ClientId; // the online service (a later task) reads it when it starts
     saveSettings();
     pollStatus();
 

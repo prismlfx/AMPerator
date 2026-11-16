@@ -152,3 +152,28 @@ TEST_CASE("settings: the manually chosen footswitch device round trips")
     f.replaceWithText(R"({"footswitchDevice": {"vid": "x", "pid": 3}})");
     REQUIRE_FALSE(amp::Settings::load(f).footswitchDevice.has_value());
 }
+
+TEST_CASE("settings: the TONE3000 fields default off/empty and round trip")
+{
+    TempDir t;
+    auto f = t.dir.getChildFile("settings.json");
+    amp::Settings s;
+    CHECK_FALSE(s.tone3000AutoFetch);
+    CHECK(s.tone3000ClientId.isEmpty());
+    REQUIRE(s.save(f));
+    auto d = amp::Settings::load(f);
+    CHECK_FALSE(d.tone3000AutoFetch);
+    CHECK(d.tone3000ClientId.isEmpty());
+
+    s.tone3000AutoFetch = true;
+    s.tone3000ClientId = "t3k_pub_x";
+    REQUIRE(s.save(f));
+    auto l = amp::Settings::load(f);
+    CHECK(l.tone3000AutoFetch);
+    CHECK(l.tone3000ClientId == "t3k_pub_x");
+
+    f.replaceWithText(R"({"tone3000AutoFetch": "yes", "tone3000ClientId": 7})");
+    l = amp::Settings::load(f);
+    CHECK_FALSE(l.tone3000AutoFetch);
+    CHECK(l.tone3000ClientId.isEmpty());
+}

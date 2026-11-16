@@ -28,6 +28,8 @@ namespace amp
 {
 /** Version string of the headless engine library. */
 juce::String engineVersion();
+/** The TONE3000 client id compiled in (CMake cache variable AMP_TONE3000_CLIENT_ID; empty when not set). */
+juce::String compiledTone3000ClientId();
 
 class Bridge;
 
@@ -52,6 +54,8 @@ struct SettingsPatch
     std::optional<std::vector<Mapping>> globalMappings;
     std::optional<std::map<int, juce::String>> footswitchKeys;
     std::optional<std::optional<UsbIds>> footswitchDevice; // set to nullopt-inside = clear
+    std::optional<bool> tone3000AutoFetch;
+    std::optional<juce::String> tone3000ClientId;
 };
 
 /** The facade the app owns: wires every engine unit together and serves the JSON bridge.

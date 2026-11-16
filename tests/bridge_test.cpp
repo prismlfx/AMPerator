@@ -1130,6 +1130,28 @@ TEST_CASE("bridge: the footswitch device can be picked manually and is persisted
     CHECK_FALSE(Settings::load(f.data.getChildFile("settings.json")).footswitchDevice.has_value());
 }
 
+TEST_CASE("bridge: the TONE3000 settings are echoed, trimmed and persisted")
+{
+    Fixture f;
+    auto g = f.ok("getSettings");
+    CHECK_FALSE(static_cast<bool>(g["tone3000AutoFetch"]));
+    CHECK(g["tone3000ClientId"].toString().isEmpty());
+
+    auto r = f.ok("setSettings", obj({ { "tone3000AutoFetch", true }, { "tone3000ClientId", "  t3k_pub_x \n" } }));
+    CHECK(static_cast<bool>(r["tone3000AutoFetch"]));
+    CHECK(r["tone3000ClientId"].toString() == "t3k_pub_x");
+
+    f.start(); // a restart reloads settings.json
+    g = f.ok("getSettings");
+    CHECK(static_cast<bool>(g["tone3000AutoFetch"]));
+    CHECK(g["tone3000ClientId"].toString() == "t3k_pub_x");
+
+    CHECK_FALSE(static_cast<bool>(f.call("setSettings", obj({ { "tone3000ClientId", 5 } }))["ok"]));
+    r = f.ok("setSettings", obj({ { "tone3000AutoFetch", false } })); // other fields stay
+    CHECK_FALSE(static_cast<bool>(r["tone3000AutoFetch"]));
+    CHECK(r["tone3000ClientId"].toString() == "t3k_pub_x");
+}
+
 TEST_CASE("bridge: stomping pedals never marks the rig dirty, but an explicit save keeps the bypass state")
 {
     Fixture f;

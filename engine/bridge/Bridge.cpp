@@ -187,6 +187,10 @@ SettingsPatch settingsPatch(const juce::var& a)
             p.footswitchDevice = std::optional<UsbIds>(UsbIds { (uint16_t) vid, (uint16_t) pid });
         }
     }
+    if (a.hasProperty("tone3000AutoFetch"))
+        p.tone3000AutoFetch = boolean(a, "tone3000AutoFetch");
+    if (a.hasProperty("tone3000ClientId"))
+        p.tone3000ClientId = str(a, "tone3000ClientId").trim();
     return p;
 }
 
@@ -391,7 +395,9 @@ juce::var settings(const Settings& s)
                     { "watchedFolders", strings(s.watchedFolders) },
                     { "globalMappings", mappings(s.globalMappings) },
                     { "footswitchKeys", keys },
-                    { "footswitchDevice", device } });
+                    { "footswitchDevice", device },
+                    { "tone3000AutoFetch", s.tone3000AutoFetch },
+                    { "tone3000ClientId", s.tone3000ClientId } });
 }
 
 juce::var rig(const RigDocument& doc, const std::function<juce::var(const NodeDoc&)>& artFor)

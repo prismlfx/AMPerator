@@ -34,6 +34,11 @@ struct Settings
         automatically recognised models. Stored as {"vid": n, "pid": n}. */
     std::optional<std::pair<uint16_t, uint16_t>> footswitchDevice;
 
+    /** Download a missing TONE3000 model automatically when a rig that needs it loads (only when connected). */
+    bool tone3000AutoFetch = false;
+    /** TONE3000 publishable key (OAuth client id); non-empty overrides the compiled-in AMP_TONE3000_CLIENT_ID. */
+    juce::String tone3000ClientId;
+
     /** Missing/corrupt file -> defaults; a corrupt file is first copied to settings.json.corrupt (.corrupt.2, ... when
         that exists). Missing keys or wrong-typed values -> that field's default. */
     static Settings load(const juce::File&);
