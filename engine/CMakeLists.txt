@@ -40,6 +40,8 @@ add_library(amp_engine STATIC
   online/HttpTransport.h
   online/Pkce.cpp
   online/Pkce.h
+  online/ProviderIndex.cpp
+  online/ProviderIndex.h
   online/SecureStore.h
   online/Tone3000Auth.cpp
   online/Tone3000Auth.h
