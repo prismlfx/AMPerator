@@ -1,5 +1,8 @@
 #include "Pkce.h"
 
+#include <cstdlib>
+#include <random>
+
 #include <juce_cryptography/juce_cryptography.h>
 
 namespace amp::online::pkce
@@ -24,12 +27,24 @@ static juce::String base64Url(const void* data, size_t size)
     return out;
 }
 
+// RFC 7636 §7.1 wants a cryptographically random verifier (and the OAuth state is drawn the same way), so
+// juce::Random's seeded LCG will not do: use the OS CSPRNG.
+static void fillSecureRandom(void* dest, size_t size)
+{
+#if JUCE_MAC || JUCE_IOS || defined(__FreeBSD__) || defined(__OpenBSD__)
+    arc4random_buf(dest, size);
+#else
+    static thread_local std::random_device device; // entropy source on Windows/Linux
+    auto* out = static_cast<juce::uint8*>(dest);
+    for (size_t i = 0; i < size; ++i)
+        out[i] = static_cast<juce::uint8>(device() & 0xff);
+#endif
+}
+
 juce::String randomUrlSafe(int numBytes)
 {
     juce::MemoryBlock bytes(static_cast<size_t>(juce::jmax(0, numBytes)));
-    auto& rng = juce::Random::getSystemRandom();
-    for (size_t i = 0; i < bytes.getSize(); ++i)
-        bytes[i] = static_cast<char>(rng.nextInt(256));
+    fillSecureRandom(bytes.getData(), bytes.getSize());
     return base64Url(bytes.getData(), bytes.getSize());
 }
 

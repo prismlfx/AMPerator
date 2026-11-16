@@ -84,7 +84,8 @@ TEST_CASE("online_pkce: FakeHttp matches by method and first registered prefix, 
     REQUIRE(m.status == 0);
     REQUIRE_FALSE(m.ok());
     REQUIRE(m.error == "no fake response for GET https://other.test/");
-    REQUIRE(http.requests.size() == 3);
+    REQUIRE(http.requestCount() == 3);
+    REQUIRE(http.snapshot()[2].url == "https://other.test/");
 }
 
 TEST_CASE("online_pkce: FakeHttp::file writes to toFile when set")
@@ -93,7 +94,7 @@ TEST_CASE("online_pkce: FakeHttp::file writes to toFile when set")
     juce::MemoryBlock bytes("hello", 5);
     http.on("GET", "https://x.test/f", [&](const HttpRequest&) { return amp_test::FakeHttp::file(200, bytes); });
 
-    auto f = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("amp_fakehttp_test.bin");
+    auto f = juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("amp_fakehttp_test", ".bin");
     f.deleteFile();
     HttpRequest req;
     req.url = "https://x.test/f";
@@ -103,4 +104,38 @@ TEST_CASE("online_pkce: FakeHttp::file writes to toFile when set")
     REQUIRE(r.body.isEmpty());
     REQUIRE(f.loadFileAsString() == "hello");
     f.deleteFile();
+}
+
+TEST_CASE("online_pkce: FakeHttp::file built ahead of time and captured still writes toFile")
+{
+    amp_test::FakeHttp http;
+    juce::MemoryBlock bytes("abc", 3);
+    const auto prebuilt = amp_test::FakeHttp::file(200, bytes); // built on this thread, before any request
+    http.on("GET", "https://x.test/f", [prebuilt](const HttpRequest&) { return prebuilt; });
+
+    auto f = juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("amp_fakehttp_pre", ".bin");
+    HttpRequest req;
+    req.url = "https://x.test/f";
+    req.toFile = f;
+    auto r = http.request(req);
+    REQUIRE(r.ok());
+    REQUIRE(r.header("X-Fake-File-Id").isEmpty());
+    REQUIRE(f.loadFileAsString() == "abc");
+    f.deleteFile();
+
+    HttpRequest noFile;
+    noFile.url = "https://x.test/f";
+    auto again = http.request(noFile);
+    REQUIRE(again.status == 200);
+    REQUIRE(again.body == "abc");
+}
+
+TEST_CASE("online_pkce: FakeHttp does not match a POST against a GET route")
+{
+    amp_test::FakeHttp http;
+    http.on("GET", "https://x.test/", [](const HttpRequest&) { return amp_test::FakeHttp::json(200, "{}"); });
+    HttpRequest post;
+    post.method = "POST";
+    post.url = "https://x.test/a";
+    REQUIRE(http.request(post).status == 0);
 }
