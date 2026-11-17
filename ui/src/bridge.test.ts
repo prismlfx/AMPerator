@@ -103,3 +103,20 @@ describe('invokeNative', () => {
     await expect(p).resolves.toBe('/Users/me/Tones');
   });
 });
+
+describe('openExternal', () => {
+  it('invokes the native openExternal and resolves with its completion value', async () => {
+    const p = bridge.openExternal('https://www.tone3000.com/x');
+    const inv = juce.sent.find((s) => s.eventId === '__juce__invoke' && s.payload.name === 'openExternal')!;
+    expect(inv.payload.params).toEqual(['https://www.tone3000.com/x']);
+    juce.fromBackend('__juce__complete', { promiseId: inv.payload.resultId, result: true });
+    await expect(p).resolves.toBe(true);
+  });
+
+  it('resolves false when the native side refuses', async () => {
+    const p = bridge.openExternal('https://evil.example/');
+    const inv = juce.sent.find((s) => s.eventId === '__juce__invoke' && s.payload.name === 'openExternal')!;
+    juce.fromBackend('__juce__complete', { promiseId: inv.payload.resultId, result: false });
+    await expect(p).resolves.toBe(false);
+  });
+});

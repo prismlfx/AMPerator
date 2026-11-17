@@ -1,8 +1,10 @@
 #include "MainWindow.h"
 #include "PluginWindow.h"
+#include "Tone3000AuthWindow.h"
 
 #include "Engine.h"
 #include "bridge/Bridge.h"
+#include "online/ExternalLinks.h"
 
 #include <AmpUiData.h>
 
@@ -108,6 +110,8 @@ public:
                                           { handleBridgeMessage(args, std::move(complete)); })
                       .withNativeFunction("chooseFolder", [this](const juce::Array<juce::var>&, auto complete)
                                           { chooseFolder(std::move(complete)); })
+                      .withNativeFunction("openExternal", [](const juce::Array<juce::var>& args, auto complete)
+                                          { openExternal(args, std::move(complete)); })
                       .withResourceProvider([&e](const juce::String& url)
                                             {
                                                 return url.startsWith("/art/") ? artResource(e, url) : uiResource(url);
@@ -162,6 +166,16 @@ private:
         };
     }
 
+    /** Opens a tone3000.com link in the default browser; anything else completes false and launches nothing. */
+    static void openExternal(const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
+    {
+        const auto url = args.size() == 1 && args.getFirst().isString() ? args.getFirst().toString() : juce::String();
+        const bool allowed = online::isAllowedExternalUrl(url);
+        if (allowed)
+            juce::URL(url).launchInDefaultBrowser();
+        complete(allowed);
+    }
+
     void chooseFolder(juce::WebBrowserComponent::NativeFunctionCompletion complete)
     {
         if (chooser != nullptr)
@@ -206,6 +220,15 @@ MainWindow::MainWindow(Engine& e)
     // Every rebuild creates fresh plugin instances: close the editors first. A rebuild of the same rig (structural
     // edit, device rate change) reopens the editors of the nodes that are still there.
     engine.beforeNodesReplaced = [this](bool sameRig) { pluginWindows->closeAll(sameRig); };
+    engine.onOpenAuthWindow = [this](const juce::String& url, const juce::String& redirectPrefix,
+                                     std::function<void(const juce::String&)> done)
+    { openAuthWindow(url, redirectPrefix, std::move(done)); };
+    // Disconnect: drop the sign-in session too (closing the window first, which reports done("")).
+    engine.onClearAuthCookies = [this]
+    {
+        closeAuthWindow();
+        juce::WebBrowserComponent::clearCookies();
+    };
 
     setUsingNativeTitleBar(true);
     setContentOwned(new Content(engine), false);
@@ -219,7 +242,31 @@ MainWindow::~MainWindow()
 {
     engine.onOpenPluginEditor = nullptr;
     engine.beforeNodesReplaced = nullptr;
+    engine.onOpenAuthWindow = nullptr;
+    engine.onClearAuthCookies = nullptr;
+    authWindow.reset(); // app quit: no done() callback
     pluginWindows.reset(); // closes every editor while the engine (and its plugin instances) still exists
+}
+
+void MainWindow::openAuthWindow(const juce::String& url, const juce::String& redirectPrefix,
+                                std::function<void(const juce::String&)> done)
+{
+    closeAuthWindow(); // a new request replaces an open window (the old flow gets done(""))
+    authWindow = std::make_unique<Tone3000AuthWindow>(
+        url, redirectPrefix, std::move(done), this,
+        [this](Tone3000AuthWindow& closed)
+        {
+            if (authWindow.get() == &closed) // not a window that was already replaced
+                authWindow.reset();
+        });
+}
+
+void MainWindow::closeAuthWindow()
+{
+    if (authWindow == nullptr)
+        return;
+    auto old = std::move(authWindow);
+    old->cancel(); // done("") unless the window already reported a result
 }
 
 void MainWindow::closeButtonPressed()

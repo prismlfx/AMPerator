@@ -2,12 +2,14 @@
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
+#include <functional>
 #include <memory>
 
 namespace amp
 {
 class Engine;
 class PluginWindows;
+class Tone3000AuthWindow;
 
 /** The app window: a WebBrowserComponent hosting the web UI (ui/), connected to the engine's JSON bridge.
 
@@ -17,6 +19,8 @@ class PluginWindows;
                       every other engine event (Bridge::send -> emitEventIfBrowserIsVisible("amp", message)).
       chooseFolder()  opens a native folder chooser (the web view has none); resolves with the chosen absolute
                       path, or "" when cancelled.
+      openExternal(url)  opens url in the default browser and resolves true, only for https://www.tone3000.com/...
+                      (online/ExternalLinks.h); anything else resolves false and opens nothing.
 
     The page is served from the embedded ui/dist (binary data) through the resource provider; in Debug builds the
     environment variable AMP_UI_DEV=1 loads the Vite dev server at http://localhost:5173 instead (cd ui && npm run
@@ -24,7 +28,8 @@ class PluginWindows;
     serves node art: "/art/<path>" maps to an image inside the library's Art/ folder (Engine::artFileForRequest).
 
     Plugin editors (Engine::onOpenPluginEditor) open in PluginWindows owned here; Engine::beforeNodesReplaced
-    closes them before the engine destroys the plugin instances. Destroy this window before the Engine. */
+    closes them before the engine destroys the plugin instances. The TONE3000 sign-in window
+    (Engine::onOpenAuthWindow) is owned here too, one at a time. Destroy this window before the Engine. */
 class MainWindow final : public juce::DocumentWindow
 {
 public:
@@ -36,8 +41,13 @@ public:
 private:
     class Content;
 
+    void openAuthWindow(const juce::String& url, const juce::String& redirectPrefix,
+                        std::function<void(const juce::String&)> done);
+    void closeAuthWindow();
+
     Engine& engine;
     std::unique_ptr<PluginWindows> pluginWindows;
+    std::unique_ptr<Tone3000AuthWindow> authWindow;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainWindow)
 };

@@ -39,6 +39,7 @@ add_library(amp_engine STATIC
   assets/AssetIndex.cpp
   assets/AssetIndex.h
   online/DownloadManager.cpp
+  online/ExternalLinks.h
   online/DownloadManager.h
   online/HttpTransport.h
   online/JuceHttpTransport.cpp

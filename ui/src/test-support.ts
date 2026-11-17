@@ -37,7 +37,7 @@ export function installFakeJuce(): FakeJuce {
 
   (window as any).__JUCE__ = {
     backend,
-    initialisationData: { __juce__functions: ['amp', 'chooseFolder'] },
+    initialisationData: { __juce__functions: ['amp', 'chooseFolder', 'openExternal'] },
   };
 
   const fromBackend = (eventId: string, payload: unknown) => {

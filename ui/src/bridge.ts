@@ -4,6 +4,7 @@
 //   amp(json)      forwards one command envelope to amp::Bridge::handle. The function itself completes at once;
 //                  the bridge's reply arrives as an "amp" event ({"v":1,"reply":id,...}) like every other event.
 //   chooseFolder() opens a native folder chooser and resolves with the chosen path ("" when cancelled).
+//   openExternal(url) opens a tone3000.com URL in the default browser; resolves false when refused.
 // Native functions are invoked with JUCE's own low-level protocol (the same one JUCE's index.js uses):
 // emitEvent("__juce__invoke", {name, params, resultId}) -> event "__juce__complete" {promiseId, result}.
 
@@ -89,6 +90,13 @@ export function invokeNative(name: string, ...params: unknown[]): Promise<unknow
   const result = new Promise<unknown>((resolve) => pendingNative.set(resultId, resolve));
   b.emitEvent('__juce__invoke', { name, params, resultId });
   return result;
+}
+
+/** Opens `url` in the user's default browser. The app only allows https://www.tone3000.com/...; resolves false when
+    it refuses, and also outside the app (no native backend) instead of rejecting. */
+export async function openExternal(url: string): Promise<boolean> {
+  if (!attach()) return false;
+  return (await invokeNative('openExternal', url)) === true;
 }
 
 /** Sends a bridge command; resolves with its `result`, rejects with its `error` or after `timeoutMs` (default 10 s)
