@@ -6,158 +6,11 @@
 #include "online/SecureStore.h"
 #include "online/Tone3000Types.h"
 
-#include "support/BridgeFixture.h"
-#include "support/FakeHttp.h"
+#include "support/OnlineFixture.h"
 
 using namespace amp;
 using namespace amp_test;
 using amp::online::HttpRequest;
-using amp::online::SecureStore;
-
-namespace
-{
-const juce::String api = "https://www.tone3000.com/api/v1";
-const juce::String clientId = "t3k_pub_test";
-
-juce::String t3kFixture(const char* name)
-{
-    return juce::File(AMP_FIXTURES_DIR).getChildFile("tone3000").getChildFile(name).loadFileAsString();
-}
-
-juce::String userJson() { return t3kFixture("user.json"); }
-
-// The Engine's store: forwards to a store the fixture owns, so tokens survive Engine restarts. Counts accesses.
-class ForwardingStore final : public SecureStore
-{
-public:
-    ForwardingStore(SecureStore& t, std::atomic<int>& n) : target(t), accesses(n) {}
-    bool set(const juce::String& k, const juce::String& v) override { ++accesses; return target.set(k, v); }
-    std::optional<juce::String> get(const juce::String& k) override { ++accesses; return target.get(k); }
-    bool remove(const juce::String& k) override { ++accesses; return target.remove(k); }
-
-private:
-    SecureStore& target;
-    std::atomic<int>& accesses;
-};
-
-// A platform store that refuses every write (e.g. Keychain access denied).
-class RefusingStore final : public SecureStore
-{
-public:
-    bool set(const juce::String&, const juce::String&) override { return false; }
-    std::optional<juce::String> get(const juce::String&) override { return std::nullopt; }
-    bool remove(const juce::String&) override { return true; }
-};
-
-struct OnlineFixture : Fixture
-{
-    amp::online::MemorySecureStore backing; // outlives Engine restarts
-    std::atomic<int> storeAccesses { 0 };
-    FakeHttp* http = nullptr; // owned by the Engine; replaced on every start()
-    std::atomic<int> tokenStatus { 200 }; // 400 = the token endpoint answers invalid_grant
-    bool refuseWrites = false;
-
-    struct Window
-    {
-        int opened = 0;
-        juce::String url, redirectPrefix;
-        std::function<void(const juce::String&)> done;
-    } window;
-    int cookiesCleared = 0;
-
-    explicit OnlineFixture(juce::String id = clientId, bool refuse = false) : Fixture(false), refuseWrites(refuse)
-    {
-        configureOptions = [this, id](Engine::Options& o)
-        {
-            auto h = std::make_unique<FakeHttp>();
-            http = h.get();
-            h->on("POST", api + "/oauth/token", [this](const HttpRequest&)
-                  {
-                      if (tokenStatus.load() != 200)
-                          return FakeHttp::json(tokenStatus.load(), R"({"error":"invalid_grant"})");
-                      return FakeHttp::json(200, R"({"access_token":"A1","refresh_token":"R1","expires_in":3600})");
-                  });
-            h->on("GET", api + "/user", [](const HttpRequest&) { return FakeHttp::json(200, userJson()); });
-            o.httpTransport = std::move(h);
-            if (refuseWrites)
-                o.secureStore = std::make_unique<RefusingStore>();
-            else
-                o.secureStore = std::make_unique<ForwardingStore>(backing, storeAccesses);
-            o.tone3000ClientId = id;
-        };
-        configureEngine = [this](Engine& e)
-        {
-            e.onOpenAuthWindow = [this](const juce::String& url, const juce::String& prefix,
-                                        std::function<void(const juce::String&)> done)
-            {
-                ++window.opened;
-                window.url = url;
-                window.redirectPrefix = prefix;
-                window.done = std::move(done);
-            };
-            e.onClearAuthCookies = [this] { ++cookiesCleared; };
-        };
-        start();
-    }
-
-    ~OnlineFixture() { engine.reset(); } // before `backing` goes
-
-    juce::var status() { return ok("tone3000Status"); }
-
-    // GET api + path answers the fixture file (on the current Engine's FakeHttp).
-    void serve(const juce::String& path, const char* file)
-    {
-        http->on("GET", api + path,
-                 [body = t3kFixture(file)](const HttpRequest&) { return FakeHttp::json(200, body); });
-    }
-
-    void serveTone()
-    {
-        serve("/tones/t_456", "tone.json");
-        serve("/models?tone_id=t_456&architecture=2&page_size=300", "models_a2.json");
-        serve("/models?tone_id=t_456&architecture=1&page_size=300", "models_a1.json");
-    }
-
-    // Pumps until the window has been opened `n` times.
-    void waitForWindow(int n)
-    {
-        const auto deadline = juce::Time::getMillisecondCounter() + 5000;
-        while (window.opened < n && juce::Time::getMillisecondCounter() < deadline)
-            pump(10);
-        REQUIRE(window.opened == n);
-    }
-
-    // A query parameter of the authorize URL the window was opened with.
-    juce::String urlParam(const juce::String& name) const
-    {
-        const juce::URL u(window.url);
-        const int i = u.getParameterNames().indexOf(name);
-        return i < 0 ? juce::String() : u.getParameterValues()[i];
-    }
-
-    // Starts tone3000Connect and checks the window opened; returns the command id.
-    int startConnect()
-    {
-        const int opened = window.opened;
-        const int id = post("tone3000Connect");
-        REQUIRE(window.opened == opened + 1);
-        return id;
-    }
-
-    // Connects with a valid callback; returns the reply's result.
-    juce::var connect()
-    {
-        const int id = startConnect();
-        window.done("code=c&state=" + urlParam("state"));
-        const auto r = waitReply(id);
-        INFO(juce::JSON::toString(r, true));
-        REQUIRE(static_cast<bool>(r["ok"]));
-        return r["result"];
-    }
-};
-
-bool isFalse(const juce::var& v) { return v.isBool() && ! static_cast<bool>(v); }
-} // namespace
 
 TEST_CASE("bridge_online: getState reports a configured, disconnected TONE3000")
 {
@@ -645,4 +498,97 @@ TEST_CASE("bridge_online: disconnect abandons a pending sign-in")
     CHECK(isFalse(f.status()["connected"]));
     CHECK(f.http->requestCount() == 0); // the code was never exchanged
     f.connect();                        // a new flow works
+}
+
+TEST_CASE("bridge_online: disconnect replies an abandoned sign-in at once")
+{
+    OnlineFixture f;
+    const int id = f.startConnect();
+    const auto staleDone = f.window.done;
+    f.ok("tone3000Disconnect");
+    const auto r = f.replyTo(id); // no window callback needed
+    REQUIRE_FALSE(r.isVoid());
+    CHECK(static_cast<bool>(r["ok"]));
+    CHECK(static_cast<bool>(r["result"]["canceled"]));
+
+    staleDone(""); // the window closing later replies nothing more
+    f.pump(50);
+    int replies = 0;
+    for (auto& m : f.sent)
+        if (m.hasProperty("reply") && m["reply"] == juce::var(id))
+            ++replies;
+    CHECK(replies == 1);
+}
+
+TEST_CASE("bridge_online: a late code exchange of an abandoned sign-in never undoes a newer session")
+{
+    OnlineFixture f;
+    f.holdTokenCall = 1; // the first exchange hangs until released
+    const int abandoned = f.startConnect();
+    f.window.done("code=c&state=" + f.urlParam("state"));
+    const auto deadline = juce::Time::getMillisecondCounter() + 5000;
+    while (f.tokenCalls.load() < 1 && juce::Time::getMillisecondCounter() < deadline)
+        f.pump(10);
+    REQUIRE(f.tokenCalls.load() == 1);
+
+    f.ok("tone3000Disconnect");
+    CHECK(static_cast<bool>(f.replyTo(abandoned)["result"]["canceled"]));
+
+    f.connect(); // a newer sign-in completes first
+    REQUIRE(static_cast<bool>(f.status()["connected"]));
+
+    f.holdTokenCall = 0; // the abandoned exchange finishes now
+    f.pump(200);
+    CHECK(static_cast<bool>(f.status()["connected"]));
+    CHECK(static_cast<bool>(f.lastEvent("tone3000Status")["connected"]));
+    CHECK(f.backing.get(clientId).has_value());
+}
+
+TEST_CASE("bridge_online: a late code exchange of an abandoned sign-in is undone when nothing newer signed in")
+{
+    OnlineFixture f;
+    f.holdTokenCall = 1;
+    f.startConnect();
+    f.window.done("code=c&state=" + f.urlParam("state"));
+    const auto deadline = juce::Time::getMillisecondCounter() + 5000;
+    while (f.tokenCalls.load() < 1 && juce::Time::getMillisecondCounter() < deadline)
+        f.pump(10);
+    f.ok("tone3000Disconnect");
+
+    f.holdTokenCall = 0;
+    f.pump(200);
+    CHECK(isFalse(f.status()["connected"]));
+    CHECK(isFalse(f.lastEvent("tone3000Status")["connected"]));
+    CHECK_FALSE(f.backing.get(clientId).has_value());
+}
+
+TEST_CASE("bridge_online: a picker code exchange that reconnects reports the status and loads the user")
+{
+    OnlineFixture f;
+    f.connect();
+    f.serve("/tones/trending", "list_trending.json");
+    const int browse = f.post("tone3000Browse");
+    const auto pickerState = f.urlParam("state");
+
+    // The session ends while the picker is open (refresh refused).
+    REQUIRE(f.backing.set(clientId, R"({"access":"A1","refresh":"R1","expiresAtMs":1})"));
+    f.tokenStatus = 400;
+    CHECK(f.callLater("tone3000List", obj({ { "list", "trending" } }))["error"].toString() == "not connected");
+    f.pump(50);
+    REQUIRE(isFalse(f.status()["connected"]));
+
+    f.tokenStatus = 200;
+    const auto before = f.events("tone3000Status").size();
+    f.window.done("code=c2&tone_id=t_1&state=" + pickerState);
+    CHECK(f.waitReply(browse)["result"]["toneId"].toString() == "t_1");
+    const auto deadline = juce::Time::getMillisecondCounter() + 5000;
+    while (f.status()["user"].isVoid() && juce::Time::getMillisecondCounter() < deadline)
+        f.pump(10);
+    CHECK(static_cast<bool>(f.status()["connected"]));
+    CHECK(f.status()["user"]["username"].toString() == "jane");
+    bool sawConnected = false;
+    const auto all = f.events("tone3000Status");
+    for (size_t i = before; i < all.size(); ++i)
+        sawConnected = sawConnected || static_cast<bool>(all[i]["connected"]);
+    CHECK(sawConnected);
 }

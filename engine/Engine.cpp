@@ -103,6 +103,9 @@ Engine::Engine(Options o)
         tone3000 = std::make_unique<online::Tone3000Service>(
             online::Tone3000Service::Deps { clientId, *http, *secureStore, dataDir, libraryRoot, assets });
         tone3000->emit = [this](const juce::String& name, const juce::var& data) { bridge().emit(name, data); };
+        tone3000->placeInRig = [this](const juce::File& file, const juce::String& sha,
+                                      const online::DownloadRequest& request)
+        { return placeDownload(file, sha, request); };
     }
 
     // Plugins are not scanned at startup (rescanPlugins does that); a leftover crash marker blacklists its plugin.
@@ -247,6 +250,7 @@ juce::String Engine::installRig(const RigDocument& doc, bool isSaved, bool isStr
     if (! built)
         return error.isNotEmpty() ? error : juce::String("rig could not be built");
 
+    markFetchable(*built);
     if (! realtime.swapPlan(built->plan))
     {
         const juce::String message = "the audio engine refused the new plan (sample rate mismatch)";
@@ -269,6 +273,7 @@ juce::String Engine::installRig(const RigDocument& doc, bool isSaved, bool isStr
         mapping.cancelLearn();
         setDirty(false);
         emitRigLoaded();
+        autoFetch();
     }
     return {};
 }
@@ -299,6 +304,7 @@ void Engine::rebuildForDevice(double sampleRate, int bufferSize)
         reportError(error, "deviceRestart");
         return;
     }
+    markFetchable(*built);
     if (! realtime.swapPlan(built->plan))
     {
         reportError("the audio engine refused the rebuilt plan", "deviceRestart"); // keep the previous rig
@@ -334,10 +340,19 @@ void Engine::dispatchPendingPluginChanges()
                 node->dispatchPendingEdit();
 }
 
+void Engine::cancelDownloads()
+{
+    if (tone3000 != nullptr)
+        tone3000->cancelDownloads();
+}
+
 bool Engine::requestQuit()
 {
     if (! dirty)
+    {
+        cancelDownloads();
         return true;
+    }
     quitIsPending = true;
     bridge().emit("quitRequested", json::object({ { "rigName", live ? live->doc.name : juce::String() } }));
     return false;
@@ -353,6 +368,7 @@ CommandResult Engine::confirmQuit(const juce::String& action)
     if (action == "save")
         if (auto r = saveRig(); ! r.ok)
             return r; // stay: the UI shows why
+    cancelDownloads();
     if (onQuitConfirmed)
         onQuitConfirmed();
     return CommandResult::success();
@@ -448,7 +464,13 @@ std::optional<AssetRef> Engine::assetRefFor(const juce::String& kind, const juce
     const juce::File f(file);
     for (auto& e : assets.list(kind))
         if (e.file == f)
-            return AssetRef { kind, f.getFileName(), e.sha256, std::nullopt };
+        {
+            AssetRef ref { kind, f.getFileName(), e.sha256, std::nullopt };
+            if (tone3000 != nullptr) // a downloaded file keeps its origin, however it was picked
+                if (const auto p = tone3000->index().bySha(e.sha256); p && p->modelId.isNotEmpty())
+                    ref.source = AssetSource { "tone3000", p->modelId };
+            return ref;
+        }
     return std::nullopt;
 }
 
@@ -563,9 +585,22 @@ juce::var Engine::artFor(const NodeDoc& n) const
     if (n.type == NodeType::Plugin && n.plugin && n.plugin->uid.isNotEmpty())
         if (const auto f = PluginHost::snapshotFile(artDir().getChildFile("cache"), n.plugin->uid); f.existsAsFile())
             snapshot = f.getFullPathName();
+    juce::String providerImage;
+    if (tone3000 != nullptr && n.asset && n.asset->sha256.isNotEmpty())
+        if (const auto p = tone3000->index().bySha(n.asset->sha256))
+            providerImage = providerImageFile(p->image);
     return json::object({ { "archetype", n.artArchetype },
                           { "image", rigId.isNotEmpty() && n.id.isNotEmpty() ? userImageFor(rigId, n.id) : juce::String() },
-                          { "snapshot", snapshot } });
+                          { "snapshot", snapshot },
+                          { "providerImage", providerImage } });
+}
+
+juce::String Engine::providerImageFile(const juce::String& relative) const
+{
+    if (relative.isEmpty() || juce::File::isAbsolutePath(relative))
+        return {};
+    const auto f = artDir().getChildFile(relative);
+    return f.isAChildOf(artDir()) && f.existsAsFile() ? f.getFullPathName() : juce::String();
 }
 
 void Engine::snapshotPluginEditors()

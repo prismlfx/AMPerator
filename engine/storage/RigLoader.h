@@ -16,6 +16,9 @@ struct LoadReport
     juce::StringArray missingAssets, missingPlugins; // asset file names / plugin names that could not be loaded
     juce::StringArray placeholderNodeIds;            // nodes running as bypassed placeholders
     juce::StringArray resolvedByFilename;            // loaded asset files matched by name, not hash (warn the user)
+    // Placeholder nodes whose asset came from TONE3000 (asset.source.provider "tone3000" with an id), so it can be
+    // downloaded again. Filled by the Engine after a build (build() leaves it empty: it knows no providers).
+    juce::StringArray fetchable;
 };
 
 struct LiveRig

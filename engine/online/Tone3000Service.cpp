@@ -1,10 +1,13 @@
 #include "Tone3000Service.h"
 
+#include <ctime>
 #include <stdexcept>
 
 #include <juce_events/juce_events.h>
 
 #include "Engine.h"
+#include "Placement.h"
+#include "assets/AssetIndex.h"
 
 namespace amp::online
 {
@@ -30,6 +33,23 @@ juce::var object(std::initializer_list<std::pair<const char*, juce::var>> props)
 }
 
 juce::var canceledResult() { return object({ { "canceled", true } }); }
+
+// Now as ISO 8601 UTC with seconds, e.g. "2026-10-20T18:02:11Z" (Provenance::downloadedAt).
+juce::String nowIso8601Utc()
+{
+    const auto t = std::time(nullptr);
+    std::tm utc {};
+#if JUCE_WINDOWS
+    gmtime_s(&utc, &t);
+#else
+    gmtime_r(&t, &utc);
+#endif
+    char text[32] = {};
+    std::strftime(text, sizeof(text), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    return text;
+}
+
+bool hasNodeTarget(const DownloadRequest& r) { return r.nodeId.isNotEmpty() || ! r.addNode.isVoid(); }
 
 AuthConfig authConfig(const juce::String& clientId)
 {
@@ -64,6 +84,7 @@ Tone3000Service::Tone3000Service(Deps d)
     jassert(deps.clientId.isNotEmpty());
     DownloadManager::cleanPartials(deps.dataDir.getChildFile("tone3000").getChildFile(".partial"));
     providerIndex.load();
+    downloads.onEvent = [this](const JobEvent& e) { onJobEvent(e); }; // message thread, never after destruction
 
     // Tokens gone for good (refresh refused) on any thread. signOutQuietly() emits its own status for the sign-out it
     // causes, so the synchronous callback from its auth.clear() is skipped.
@@ -90,7 +111,7 @@ Tone3000Service::Tone3000Service(Deps d)
 Tone3000Service::~Tone3000Service()
 {
     alive->store(false); // results still on their way are dropped
-    downloads.cancelAll();
+    cancelDownloads();
     pool.removeAllJobs(true, -1); // jobs use the units below; requests time out on their own
 }
 
@@ -127,6 +148,12 @@ void Tone3000Service::emitStatus()
 {
     if (emit)
         emit("tone3000Status", status().toVar());
+}
+
+void Tone3000Service::emitStatusIfChanged(const juce::String& before)
+{
+    if (juce::JSON::toString(status().toVar(), true) != before)
+        emitStatus();
 }
 
 // ---- Window flows (connect, browse) ----
@@ -210,8 +237,8 @@ void Tone3000Service::signIn(const FlowPtr& f, const juce::String& query, std::f
                      if (f->abandoned)
                      {
                          if (r.signedIn)
-                             signOutQuietly(); // the exchange finished after the disconnect: undo it
-                         return finish(f, CommandResult::success(canceledResult()));
+                             undoAbandonedSignIn(); // the exchange finished after the disconnect
+                         return finish(f, CommandResult::success(canceledResult())); // already replied: no-op
                      }
                      if (! r.stateOk)
                          return stateMismatch(f);
@@ -309,13 +336,17 @@ void Tone3000Service::pickerDone(const FlowPtr& f, const BrowseRequest& request,
                      if (f->abandoned)
                      {
                          if (r.signedIn)
-                             signOutQuietly();
-                         return finish(f, CommandResult::success(canceledResult()));
+                             undoAbandonedSignIn();
+                         return finish(f, CommandResult::success(canceledResult())); // already replied: no-op
                      }
                      if (! r.stateOk)
                          return stateMismatch(f);
-                     if (r.signedIn)
+                     if (r.signedIn && ! connected) // the session had ended while the picker was open
+                     {
                          connected = true;
+                         emitStatus();
+                         loadUser();
+                     }
                      if (r.canceled || (r.toneId.isEmpty() && r.error.isEmpty()))
                          return finish(f, CommandResult::success(canceledResult()));
                      if (r.toneId.isEmpty())
@@ -399,19 +430,173 @@ void Tone3000Service::signOutQuietly()
     user.reset();
 }
 
+void Tone3000Service::undoAbandonedSignIn()
+{
+    if (connected) // a newer sign-in finished first and owns the session now
+        return;
+    const auto before = juce::JSON::toString(status().toVar(), true);
+    signOutQuietly();
+    emitStatusIfChanged(before);
+}
+
 void Tone3000Service::disconnect()
 {
     JUCE_ASSERT_MESSAGE_THREAD
-    if (flow != nullptr) // its window may still report: that callback then replies {canceled: true}
+    if (flow != nullptr) // replied now; whatever its window or exchange reports later changes nothing
     {
-        flow->abandoned = true;
+        auto abandoned = flow;
+        abandoned->abandoned = true;
         flow = nullptr;
+        finish(abandoned, CommandResult::success(canceledResult()));
     }
     busy = false;
-    downloads.cancelAll();
+    cancelDownloads();
     signOutQuietly();
     if (clearCookies)
         clearCookies();
     emitStatus();
+}
+
+// ---- Downloads ----
+
+juce::String Tone3000Service::download(DownloadRequest request, juce::String& error)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    error = {};
+    if (! connected)
+    {
+        error = "not connected";
+        return {};
+    }
+
+    // Already in the library: the newest indexed file of this model, found by hash.
+    if (const auto sha = providerIndex.shaForModel(request.modelId))
+    {
+        const auto p = providerIndex.bySha(*sha);
+        deps.assets.rescan();
+        const auto found = deps.assets.resolve(AssetRef { p->format == "nam" ? "nam" : "ir", {}, *sha, std::nullopt });
+        if (found.how == ResolveKind::ByHash)
+        {
+            request.jobId = juce::Uuid().toString();
+            instantJobs[request.jobId] = false;
+            JobEvent e;
+            e.jobId = request.jobId;
+            e.request = request;
+            e.tone.id = p->toneId;
+            juce::MessageManager::callAsync(
+                [this, aliveFlag = alive, e, file = found.file, sha = *sha]() mutable
+                {
+                    if (! aliveFlag->load())
+                        return;
+                    const auto it = instantJobs.find(e.jobId);
+                    const bool canceled = it == instantJobs.end() || it->second;
+                    instantJobs.erase(e.jobId);
+                    emitJob(e); // queued
+                    if (canceled)
+                    {
+                        e.state = JobState::Failed;
+                        e.error = "canceled";
+                        return emitJob(e);
+                    }
+                    juce::String placeError;
+                    if (hasNodeTarget(e.request) && placeInRig)
+                        if (auto r = placeInRig(file, sha, e.request); ! r.ok)
+                            placeError = r.error;
+                    e.state = JobState::Done;
+                    e.progress = 1;
+                    emitJob(e, file, sha);
+                    if (placeError.isNotEmpty() && emit)
+                        emit("error", object({ { "message", placeError }, { "context", "tone3000" } }));
+                });
+            return request.jobId;
+        }
+    }
+    return downloads.start(std::move(request));
+}
+
+void Tone3000Service::cancel(const juce::String& jobId)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (auto it = instantJobs.find(jobId); it != instantJobs.end())
+        it->second = true;
+    else
+        downloads.cancel(jobId);
+}
+
+void Tone3000Service::cancelDownloads()
+{
+    for (auto& job : instantJobs)
+        job.second = true;
+    downloads.cancelAll();
+}
+
+void Tone3000Service::emitJob(const JobEvent& e, const juce::File& placed, const juce::String& sha)
+{
+    if (! emit)
+        return;
+    auto v = online::toVar(e);
+    if (e.state == JobState::Done)
+    {
+        auto* o = v.getDynamicObject();
+        o->setProperty("file", placed.getFullPathName());
+        o->setProperty("sha256", sha);
+        if (e.request.expectedSha.isNotEmpty())
+            o->setProperty("updated", ! e.request.expectedSha.equalsIgnoreCase(sha));
+    }
+    emit("tone3000Download", v);
+}
+
+void Tone3000Service::onJobEvent(const JobEvent& e)
+{
+    if (e.state == JobState::Done)
+        return finishDownload(e);
+    emitJob(e);
+}
+
+// Message thread, one at a time: placeFile's check-then-move needs that.
+void Tone3000Service::finishDownload(const JobEvent& e)
+{
+    Provenance p;
+    p.modelId = e.model.id.isNotEmpty() ? e.model.id : e.request.modelId;
+    p.toneId = e.tone.id;
+    p.title = e.tone.title;
+    p.modelName = e.model.name;
+    p.size = e.model.size;
+    p.architecture = e.model.architecture;
+    p.format = e.tone.format;
+    p.gear = e.tone.gear;
+    p.license = e.tone.license;
+    p.creator = e.tone.creator;
+    p.toneUrl = e.tone.url;
+    const auto artDir = deps.libraryRoot.getChildFile("Art");
+    if (e.image.existsAsFile() && e.image.isAChildOf(artDir))
+        p.image = e.image.getRelativePathFrom(artDir).replaceCharacter('\\', '/');
+    p.downloadedAt = nowIso8601Utc();
+
+    juce::String error;
+    const auto placed = placeFile(e.file, placementFor(deps.libraryRoot, p), e.sha256, error);
+    if (placed == juce::File())
+    {
+        e.file.deleteFile();
+        JobEvent failed;
+        failed.jobId = e.jobId;
+        failed.request = e.request;
+        failed.tone.id = e.tone.id;
+        failed.state = JobState::Failed;
+        failed.error = error;
+        return emitJob(failed);
+    }
+
+    providerIndex.put(e.sha256, std::move(p));
+    providerIndex.save();
+    deps.assets.rescan();
+
+    juce::String placeError;
+    if (hasNodeTarget(e.request) && placeInRig)
+        if (auto r = placeInRig(placed, e.sha256, e.request); ! r.ok)
+            placeError = r.error;
+    emitJob(e, placed, e.sha256);
+    if (placeError.isNotEmpty() && emit)
+        emit("error", object({ { "message", placeError }, { "context", "tone3000" } }));
 }
 } // namespace amp::online

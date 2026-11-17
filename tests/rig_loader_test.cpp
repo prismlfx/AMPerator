@@ -334,6 +334,30 @@ TEST_CASE("rig_loader: asset matched by filename is reported and gets the file's
     REQUIRE(capturedAmp->asset->file == "Models/tiny.nam");
 }
 
+TEST_CASE("rig_loader: capture keeps an asset's source, also when the file was matched by name")
+{
+    Fixture f;
+    f.addAsset("tiny.nam", "tiny.nam");
+    auto byName = nodeOf(amp::NodeType::NamAmp, "amp");
+    byName.asset = assetRef("nam", "tiny.nam", "0000stale");
+    byName.asset->source = amp::AssetSource { "tone3000", "m_123" };
+    auto missing = nodeOf(amp::NodeType::CabIR, "cab");
+    missing.asset = assetRef("ir", "gone.wav", "1111");
+    missing.asset->source = amp::AssetSource { "tone3000", "m_301" };
+
+    juce::String error;
+    auto live = f.loader->build(chainOf({ byName, missing }), spec, error);
+    REQUIRE(live.has_value());
+    REQUIRE(live->report.placeholderNodeIds == juce::StringArray { "cab" });
+    const auto captured = f.loader->capture(*live);
+    const auto* a = findDoc(captured, "amp");
+    REQUIRE(a->asset->sha256 != "0000stale");
+    REQUIRE(a->asset->source.has_value());
+    REQUIRE(a->asset->source->provider == "tone3000");
+    REQUIRE(a->asset->source->id == "m_123");
+    REQUIRE(findDoc(captured, "cab")->asset->source->id == "m_301");
+}
+
 TEST_CASE("rig_loader: unloadable asset becomes bypassed placeholder and is reported missing")
 {
     Fixture f;

@@ -3,6 +3,7 @@
 #include "Engine.h"
 
 #include "bridge/Bridge.h"
+#include "online/Tone3000Service.h"
 
 #include <type_traits>
 
@@ -27,7 +28,17 @@ CommandResult Engine::listAssets(const juce::String& kind)
     assets.rescan(); // files dropped into Models/, IRs/ or a watched folder since the last scan (hashes are cached)
     juce::Array<juce::var> out;
     for (auto& e : assets.list(kind))
-        out.add(json::asset(e));
+    {
+        auto a = json::asset(e);
+        if (tone3000 != nullptr)
+            if (const auto p = tone3000->index().bySha(e.sha256))
+            {
+                auto source = online::toVar(*p);
+                source.getDynamicObject()->setProperty("image", providerImageFile(p->image));
+                a.getDynamicObject()->setProperty("source", source);
+            }
+        out.add(a);
+    }
     return CommandResult::success(json::object({ { "assets", out } }));
 }
 

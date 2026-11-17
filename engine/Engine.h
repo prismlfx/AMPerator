@@ -37,6 +37,7 @@ class Bridge;
 namespace online
 {
 class Tone3000Service;
+struct DownloadRequest;
 }
 
 /** Outcome of one bridge command: `result` (an object, may be void) on success, `error` otherwise. `pending`: the
@@ -151,9 +152,9 @@ public:
 
     // ---- Quit (message thread) ----
     bool isDirty() const { return dirty; }
-    /** The app's quit request (Cmd-Q, window close). True: nothing unsaved, quit now. False: the rig has unsaved
-        changes, so `quitRequested` was emitted and the UI answers with confirmQuit (the app falls back to a native
-        dialog that calls confirmQuit itself if the UI does not answer). */
+    /** The app's quit request (Cmd-Q, window close). True: nothing unsaved, quit now (TONE3000 downloads are
+        canceled). False: the rig has unsaved changes, so `quitRequested` was emitted and the UI answers with
+        confirmQuit (the app falls back to a native dialog that calls confirmQuit itself if the UI does not answer). */
     bool requestQuit();
     bool quitPending() const { return quitIsPending; }
     /** Called (message thread) when confirmQuit decided to quit: after a successful save, or on discard. */
@@ -183,6 +184,8 @@ public:
         the press itself does not trigger anything. Persists settings and emits controlStatus. */
     CommandResult assignFootswitchKey(const juce::String& control);
     CommandResult cancelAssignFootswitchKey();
+    /** {assets: [Asset]}; a file downloaded from TONE3000 carries `source` (its provenance, image as an absolute
+        path inside Art/ or ""). */
     CommandResult listAssets(const juce::String& kind);
     CommandResult listPlugins();
     /** Starts a background scan (one at a time): `pluginScanProgress` events, then `pluginsChanged` with the new
@@ -209,7 +212,7 @@ public:
     CommandResult restoreBackup(const juce::String& id);
     CommandResult setNodeArt(const juce::String& id, const std::optional<juce::String>& archetype,
                              const std::optional<juce::String>& imageFile);
-    /** action = "save" (save, then quit), "discard" (quit) or "cancel" (stay). */
+    /** action = "save" (save, then quit), "discard" (quit) or "cancel" (stay). Quitting cancels TONE3000 downloads. */
     CommandResult confirmQuit(const juce::String& action);
 
     // TONE3000 (CommandsOnline.cpp). Without a client id every one but tone3000Status fails "not configured".
@@ -225,6 +228,18 @@ public:
     CommandResult tone3000List(const juce::String& kind, int page);
     /** Deferred: Tone (models A2 first, then A1). */
     CommandResult tone3000Tone(const juce::String& id);
+    /** {jobId} at once; `tone3000Download` events (DownloadJob) follow. The finished file goes into the library
+        (Models|IRs/TONE3000/<creator>/...) with its provenance; nodeId (an existing node) or addNode {type: NamAmp |
+        CabIR, index} then make it that node's asset through setAsset / addNode, unless the rig was replaced or the
+        node removed meanwhile; a format that does not fit the node gives an `error` event (context "tone3000").
+        A model already in the library is done without the network. "not connected" when signed out. */
+    CommandResult tone3000Download(const juce::String& modelId, const juce::String& toneId, const juce::String& nodeId,
+                                   const juce::var& addNode);
+    /** {jobs: [jobId]}: one download per fetchable node of the current rig (report.fetchable), each assigned to its
+        node when done; its done event says `updated` when the file differs from the rig's sha256. Empty nodeIds =
+        every fetchable node; a listed node that is not fetchable fails the command. "not connected" when signed out. */
+    CommandResult tone3000Fetch(const juce::StringArray& nodeIds);
+    CommandResult tone3000Cancel(const juce::String& jobId); // {}; the job ends failed "canceled"
 
 private:
     struct TunerPreparer;
@@ -240,6 +255,11 @@ private:
     void refreshMappings();
     RigDocument currentDoc() const;
     juce::var rigLoadedPayload() const;
+    void markFetchable(LiveRig&) const; // fills report.fetchable
+    void autoFetch();                   // settings.tone3000AutoFetch after a rig load
+    CommandResult placeDownload(const juce::File&, const juce::String& sha256, const online::DownloadRequest&);
+    CommandResult startFetch(const juce::StringArray& nodeIds);
+    void cancelDownloads(); // quit
     void emitRigLoaded();
     void setDirty(bool);
     NodeDoc* findDocNode(const juce::String& id);
@@ -265,6 +285,8 @@ private:
     juce::File artDir() const;
     juce::String userImageFor(const juce::String& rigId, const juce::String& nodeId) const;
     juce::var artFor(const NodeDoc&) const;
+    /** Absolute path of <libraryRoot>/Art/<image> for a provenance image path, or "" when there is none. */
+    juce::String providerImageFile(const juce::String& relative) const;
     void snapshotPluginEditors();
 
     const juce::File libraryRoot, dataDir;

@@ -21,6 +21,7 @@ struct DownloadRequest
     juce::String jobId, modelId, toneId /* optional */, nodeId /* optional */;
     juce::var addNode; // {type, index} or void; carried through untouched
     juce::String expectedSha; // optional, from the rig
+    juce::String rigId;       // optional: the rig the node target belongs to; carried through untouched
 };
 
 enum class JobState

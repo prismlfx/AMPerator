@@ -275,6 +275,24 @@ const std::map<juce::String, Handler>& commands()
               return e.tone3000List(list, page);
           } },
         { "tone3000Tone", [](Engine& e, const juce::var& a) { return e.tone3000Tone(nonEmpty(a, "id")); } },
+        { "tone3000Download", [](Engine& e, const juce::var& a)
+          {
+              const auto addNode = a["addNode"];
+              if (! addNode.isVoid())
+              {
+                  if (! isJsonObject(addNode))
+                      throw ArgError("argument \"addNode\" must be an object {type, index}");
+                  const auto type = str(addNode, "type");
+                  if (type != "NamAmp" && type != "CabIR")
+                      throw ArgError("addNode type must be \"NamAmp\" or \"CabIR\"");
+                  integer(addNode, "index");
+              }
+              return e.tone3000Download(nonEmpty(a, "modelId"), optStr(a, "toneId").value_or(""),
+                                        optStr(a, "nodeId").value_or(""), addNode);
+          } },
+        { "tone3000Fetch", [](Engine& e, const juce::var& a)
+          { return e.tone3000Fetch(a.hasProperty("nodeIds") ? stringList(a, "nodeIds") : juce::StringArray()); } },
+        { "tone3000Cancel", [](Engine& e, const juce::var& a) { return e.tone3000Cancel(nonEmpty(a, "jobId")); } },
     };
     return table;
 }
@@ -446,7 +464,8 @@ juce::var report(const LoadReport& r)
     return object({ { "missingAssets", strings(r.missingAssets) },
                     { "missingPlugins", strings(r.missingPlugins) },
                     { "placeholderNodeIds", strings(r.placeholderNodeIds) },
-                    { "resolvedByFilename", strings(r.resolvedByFilename) } });
+                    { "resolvedByFilename", strings(r.resolvedByFilename) },
+                    { "fetchable", strings(r.fetchable) } });
 }
 
 juce::var asset(const AssetEntry& e)

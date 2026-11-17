@@ -1,12 +1,13 @@
 #pragma once
 
 // The TONE3000 facade the Engine calls (tone-library spec section 5.1): connection status, connect / disconnect, the
-// picker (browse), bounded lists and tone detail.
+// picker (browse), bounded lists, tone detail and downloads into the library.
 // Owns the auth, client, download manager, provenance index and a small pool for blocking calls; turns their results
 // into bridge events. Message thread only at its public surface; worker results come back through callAsync, guarded
 // so nothing reaches a destroyed service.
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 
@@ -75,6 +76,11 @@ public:
                        std::function<void(const juce::String& query)> done)>
         openAuthWindow;
     std::function<void()> clearCookies;
+    // Called (message thread) after a finished download is in the library and the provenance index, when its
+    // request has a node target (nodeId or addNode). The Engine assigns the file to the rig; a failure becomes an
+    // `error` event {message, context: "tone3000"}. The download's `done` event follows either way.
+    std::function<CommandResult(const juce::File& placed, const juce::String& sha256, const DownloadRequest&)>
+        placeInRig;
 
     // All of these are message-thread calls. Every `reply` is called exactly once, possibly before returning.
 
@@ -90,9 +96,22 @@ public:
     void list(const juce::String& kind, int page, Reply reply);
     // Tone (with its A2 then A1 models). "not connected" when signed out. Nothing is cached.
     void tone(const juce::String& id, Reply reply);
-    // Cancels downloads, abandons a sign-in or picker window still open (its late callback replies {canceled: true}),
-    // removes the tokens, forgets the user, clears the window's cookies; emits tone3000Status.
+    // Cancels downloads, abandons a sign-in or picker window still open (its command replies {canceled: true} now;
+    // the window's late callback changes nothing), removes the tokens, forgets the user, clears the window's
+    // cookies; emits tone3000Status.
     void disconnect();
+
+    // Starts a download job and returns its id ("not connected" when signed out: `error` set, "" returned). Events
+    // `tone3000Download` (DownloadJob) follow asynchronously: queued, downloading, verifying, then done (with `file`
+    // = the library file, `sha256`, and `updated` when the request had an expectedSha) or failed. A finished file is
+    // placed in the library (Placement), recorded in the provenance index, the asset index is rescanned, and
+    // placeInRig runs for a node target. A model whose newest indexed file is in the library skips the network:
+    // queued then done.
+    juce::String download(DownloadRequest, juce::String& error);
+    // Unknown or finished job: no-op; otherwise one failed "canceled" event.
+    void cancel(const juce::String& jobId);
+    // Every running job ends "canceled" (blocks until the workers have stopped).
+    void cancelDownloads();
 
     const ProviderIndex& index() const { return providerIndex; }
 
@@ -123,6 +142,11 @@ private:
     void signOutQuietly(); // removes the tokens without the onSignedOut status event (the caller emits)
     void loadUser();
     void emitStatus();
+    void emitStatusIfChanged(const juce::String& before); // before = JSON of status().toVar()
+    void undoAbandonedSignIn();
+    void onJobEvent(const JobEvent&);
+    void finishDownload(const JobEvent&);
+    void emitJob(const JobEvent&, const juce::File& placed = {}, const juce::String& sha = {});
     template <typename T>
     void replyWith(Result<T>, Reply, std::function<juce::var(const T&)> shape);
 
@@ -139,6 +163,7 @@ private:
     bool clearing = false;  // signOutQuietly() is running auth.clear()
     FlowPtr flow;           // the open window flow, if any
     std::optional<UserRef> user;
+    std::map<juce::String, bool> instantJobs; // already-in-library jobs waiting for their done: jobId -> canceled
 
     juce::ThreadPool pool { 2 }; // last member: destroyed (joined) first
 };
