@@ -1605,3 +1605,50 @@ select:disabled {
   font-size: 14px;
   color: var(--text-muted);
 }
+
+/* ---- TONE3000 tone detail ---- */
+.tone-detail-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.tone-detail-image {
+  width: 96px;
+  height: 96px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.tone-detail-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+.tone-creator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tone-description {
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
+.tone-model-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tone-job {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.tone-job progress {
+  flex: 1;
+}
+.tone-job-error {
+  margin: 0;
+  color: var(--danger);
+}

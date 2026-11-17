@@ -5,16 +5,22 @@
 import { call, openExternal } from '../bridge';
 import { el, openModal, toast } from '../dialog';
 import { archetypeUrl, guessArchetype } from '../art/archetypes';
-import { store, type AppState } from '../state';
+import { store, type AppState, type RigNode } from '../state';
+import { nodeTitle } from './edit';
 import {
   connectTone3000,
   LIST_CALL_MS,
   libraryIndex,
+  licenseLabel,
   logoUrl,
   LONG_CALL_MS,
   markUrl,
   onJob,
   remoteImage,
+  startDownload,
+  jobsFor,
+  type DownloadArgs,
+  type ToneModel,
   TONE3000_URL,
   type Tone,
   type Tone3000Status,
@@ -40,22 +46,121 @@ const EMPTY: Record<ListId, string> = {
   latest: 'Nothing new right now.',
 };
 
-/** Where a chosen model goes: an existing node (replace) or a new node at `index` of the chain. */
+/** Where a chosen model goes: an existing node (replace) or, by default, a new node. */
 export interface DetailTarget {
   nodeId?: string;
-  addNode?: { type: 'NamAmp' | 'CabIR'; index: number };
 }
 
-/** The tone's detail window. (Minimal: the model list and download buttons come with the detail view.) */
-export async function openToneDetail(toneId: string, _target?: DetailTarget): Promise<void> {
+const isIO = (n: RigNode) => n.type === 'Input' || n.type === 'Output';
+
+/** The new node for a tone of `format` (spec §9.4), with `index` counting only the chain (non-Input/Output) nodes:
+    NAM right after the last NamAmp, else before the first CabIR, else at the end; IR right after the last NamAmp or
+    CabIR, else at the end. */
+export function addToRigTarget(nodes: RigNode[], format: Format): { type: 'NamAmp' | 'CabIR'; index: number } {
+  const chain = nodes.filter((n) => !isIO(n));
+  const lastOf = (...types: string[]) => chain.reduce((at, n, i) => (types.includes(n.type) ? i : at), -1);
+  if (format === 'nam') {
+    const amp = lastOf('NamAmp');
+    if (amp >= 0) return { type: 'NamAmp', index: amp + 1 };
+    const cab = chain.findIndex((n) => n.type === 'CabIR');
+    return { type: 'NamAmp', index: cab >= 0 ? cab : chain.length };
+  }
+  const last = lastOf('NamAmp', 'CabIR');
+  return { type: 'CabIR', index: last >= 0 ? last + 1 : chain.length };
+}
+
+function modelLabel(m: ToneModel, inLibrary: boolean): string {
+  const arch = m.architecture === '2' ? 'A2' : m.architecture === '1' ? 'A1' : '';
+  return [m.name, m.size, arch].filter(Boolean).join(' · ') + (inLibrary ? ' (in library)' : '');
+}
+
+const ACTIVE = ['queued', 'downloading', 'verifying'];
+
+/** The tone's detail window: model choice, Download / Add to rig (or Use on <node>), and the download's progress. */
+export async function openToneDetail(toneId: string, target?: DetailTarget): Promise<void> {
   let tone: Tone;
+  let known = new Set<string>();
   try {
-    tone = await call<Tone>('tone3000Tone', { id: toneId }, LIST_CALL_MS);
+    [tone, known] = await Promise.all([
+      call<Tone>('tone3000Tone', { id: toneId }, LIST_CALL_MS),
+      libraryIndex().then((i) => i.models, () => new Set<string>()),
+    ]);
   } catch (e) {
     toast((e as Error).message);
     return;
   }
-  openModal(tone.title, undefined, 'tone-detail');
+
+  const unsubscribes: (() => void)[] = [];
+  const modal = openModal(tone.title, () => unsubscribes.forEach((u) => u()), 'tone-detail');
+  const format = tone.format?.toLowerCase();
+  const supported = format === 'nam' || format === 'ir';
+  const models = tone.models ?? [];
+
+  const image = remoteImage(tone.image);
+  const heading = el('div', { class: 'tone-detail-head' });
+  if (image) heading.append(el('img', { class: 'tone-detail-image', src: image, loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' }));
+  const facts = el('div', { class: 'tone-detail-facts' });
+  const formatName = format === 'ir' ? 'IR' : format === 'nam' ? 'NAM' : (tone.format ?? '');
+  facts.append(el('div', { class: 'tone-meta' }, ...(tone.gear ? [el('span', { class: 'tone-gear muted' }, tone.gear)] : []), el('span', { class: 'format-badge' }, formatName)));
+  facts.append(el('div', { class: 'tone-creator' }, avatar(tone.creator?.avatarUrl), tone.creator?.username ?? ''));
+  const licenseText = tone.license ? licenseLabel(tone.license) : '';
+  if (licenseText) facts.append(el('div', { class: 'muted tone-license' }, licenseText));
+  if ((tone.url ?? '').startsWith(`${TONE3000_URL}/`)) facts.append(link('View on TONE3000', tone.url));
+  heading.append(facts);
+  modal.body.append(heading);
+  if (tone.description) modal.body.append(el('p', { class: 'tone-description' }, tone.description));
+
+  if (models.length === 0) {
+    modal.body.append(el('p', { class: 'muted' }, 'This tone has no downloadable models.'));
+    return;
+  }
+
+  const select = el('select', { class: 'tone-models', 'aria-label': 'Model' });
+  for (const m of models) select.append(el('option', { value: m.id }, modelLabel(m, known.has(m.id))));
+  select.value = models[0].id;
+  const selected = () => models.find((m) => m.id === select.value) ?? models[0];
+
+  const rigNodes = () => store.get().rig?.nodes;
+  const download = el('button', { class: 'button', type: 'button' }, 'Download');
+  const place = target?.nodeId
+    ? el('button', { class: 'button primary', type: 'button' }, `Use on ${nodeTitle(rigNodes()?.find((n) => n.id === target.nodeId) ?? ({ type: 'node' } as RigNode))}`)
+    : el('button', { class: 'button', type: 'button' }, 'Add to rig');
+  const actions = el('div', { class: 'modal-actions' }, target?.nodeId ? place : download, target?.nodeId ? download : place);
+  const progress = el('div', { class: 'tone-job' });
+  modal.body.append(el('label', { class: 'tone-model-label' }, 'Model', select), progress, actions);
+  if (!supported) modal.body.append(el('p', { class: 'muted' }, "AMPerator can't load this format."));
+
+  const start = async (extra: Omit<DownloadArgs, 'modelId' | 'toneId'>) => {
+    const m = selected();
+    try {
+      await startDownload({ modelId: m.id, toneId: tone.id, ...extra }, `${tone.title} — ${m.name}`);
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  };
+  download.addEventListener('click', () => void start({}));
+  place.addEventListener('click', () => {
+    if (target?.nodeId) void start({ nodeId: target.nodeId });
+    else if (rigNodes()) void start({ addNode: addToRigTarget(rigNodes()!, format as Format) });
+  });
+
+  function sync() {
+    const job = jobsFor(selected().id).at(-1);
+    const running = !!job && ACTIVE.includes(job.state);
+    progress.replaceChildren();
+    if (running) {
+      const cancel = el('button', { class: 'button small', type: 'button' }, 'Cancel');
+      cancel.addEventListener('click', () => void call('tone3000Cancel', { jobId: job.jobId }).catch((e) => toast((e as Error).message)));
+      progress.append(el('progress', { max: '1', value: String(job.progress ?? 0), 'aria-label': 'Download progress' }), cancel);
+    } else if (job?.state === 'failed') {
+      progress.append(el('p', { class: 'tone-job-error' }, job.error === 'gone' ? 'This model is no longer on TONE3000.' : `Download failed: ${job.error ?? 'unknown error'}`));
+    }
+    download.disabled = !supported || running;
+    place.disabled = !supported || running || (!target?.nodeId && !rigNodes());
+  }
+  select.addEventListener('change', sync);
+  unsubscribes.push(onJob(sync), store.subscribe(sync));
+  sync();
 }
 
 function link(label: string, url: string, cls = 'link-button'): HTMLButtonElement {

@@ -321,4 +321,28 @@ describe('Models / IRs attribution and the TONE3000 tab', () => {
     expect(root.querySelector('.tone-account')).toBeNull();
     expect(juce.commands().filter((c) => c.cmd === 'tone3000List')).toHaveLength(0);
   });
+
+  it('closing the panel disposes the TONE3000 tab; reopening shows it again', async () => {
+    await rendered();
+    const status = (connected: boolean) =>
+      juce.fromBackend('amp', { v: 1, event: 'tone3000Status', data: { configured: true, connected, busy: false, remembered: false, user: null } });
+    status(false);
+    root.querySelector<HTMLButtonElement>('[role="tab"][aria-label="TONE3000"]')!.click();
+    library.toggleLibrary(true);
+    library.toggleLibrary(false);
+    status(true); // while closed nothing is drawn or requested
+    expect(juce.commands().filter((c) => c.cmd === 'tone3000List')).toHaveLength(0);
+    library.toggleLibrary(true);
+    expect(root.querySelector('.tone-account, .tone-results')).not.toBeNull(); // re-rendered on reopen
+  });
+
+  it('rendering the library again disposes the previous TONE3000 tab', async () => {
+    await rendered();
+    juce.fromBackend('amp', { v: 1, event: 'tone3000Status', data: { configured: true, connected: false, busy: false, remembered: false, user: null } });
+    root.querySelector<HTMLButtonElement>('[role="tab"][aria-label="TONE3000"]')!.click();
+    const old = root.querySelector('.library-content')!;
+    library.renderLibrary(document.createElement('aside'));
+    juce.fromBackend('amp', { v: 1, event: 'tone3000Status', data: { configured: true, connected: true, busy: false, remembered: false, user: null } });
+    expect(old.querySelector('.tone-account')).toBeNull();
+  });
 });

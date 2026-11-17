@@ -35,6 +35,8 @@ const MAX_RECENTS = 10; // Settings::maxRecent
 let panel: HTMLElement | null = null;
 let onToggle: ((open: boolean) => void) | null = null;
 let focusSearch: (() => void) | null = null;
+let disposeLibrary: (() => void) | null = null; // the previous renderLibrary's TONE3000 tab and panel hook
+let onPanelToggle: ((open: boolean) => void) | null = null;
 
 /** Opens or closes the panel rendered by renderLibrary. Returns the new state. */
 export function toggleLibrary(open = !panel?.classList.contains('open')): boolean {
@@ -42,6 +44,7 @@ export function toggleLibrary(open = !panel?.classList.contains('open')): boolea
   panel.classList.toggle('open', open);
   panel.toggleAttribute('inert', !open);
   panel.setAttribute('aria-hidden', String(!open));
+  onPanelToggle?.(open);
   onToggle?.(open);
   return open;
 }
@@ -104,6 +107,7 @@ function attribution(source: AssetRow['source']): string {
 }
 
 export function renderLibrary(root: HTMLElement): void {
+  disposeLibrary?.();
   panel = root;
   root.classList.add('library');
   root.setAttribute('aria-label', 'Library');
@@ -409,6 +413,20 @@ export function renderLibrary(root: HTMLElement): void {
     lastKey = key;
     if (tab === 'rigs') void refreshRigs();
   }
+
+  // The TONE3000 tab holds subscriptions: it is torn down while the panel is closed and drawn again on reopen.
+  onPanelToggle = (open) => {
+    if (tab !== 'tone3000') return;
+    if (open && !disposeTab) void showTab();
+    else if (!open) {
+      leaveTab();
+      content.replaceChildren();
+    }
+  };
+  disposeLibrary = () => {
+    leaveTab();
+    onPanelToggle = null;
+  };
 
   renderTabs();
   content.replaceChildren(rigsTop, rigsList); // the search field works before the first listRigs reply

@@ -123,25 +123,46 @@ export async function libraryIndex(): Promise<{ models: Set<string>; tones: Set<
 
 // ---- Download jobs ----
 
-const jobs = new Map<string, DownloadJob>();
-const titles = new Map<string, string>(); // jobId -> tone title, remembered when the UI starts a download
+const jobs = new Map<string, DownloadJob>(); // insertion order = order of the latest event
+const titles = new Map<string, string>(); // jobId -> title, remembered when the UI starts a download
+const pendingTitles = new Map<string, string>(); // modelId -> title of a download whose reply is not in yet
 const listeners = new Set<(job: DownloadJob) => void>();
 let listening = false;
+const MAX_FINISHED = 50;
 
-const titleOf = (jobId: string) => titles.get(jobId) ?? 'the model';
+const isTerminal = (j: DownloadJob) => j.state === 'done' || j.state === 'failed';
+
+function titleOf(e: DownloadJob): string {
+  let title = titles.get(e.jobId);
+  if (title === undefined && pendingTitles.has(e.modelId)) {
+    title = pendingTitles.get(e.modelId)!; // an event that beat the reply
+    titles.set(e.jobId, title);
+  }
+  return title ?? 'the model';
+}
+
+function prune() {
+  const finished = [...jobs.values()].filter(isTerminal);
+  for (const j of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED))) {
+    jobs.delete(j.jobId);
+    titles.delete(j.jobId);
+  }
+}
 
 function onJobEvent(e: DownloadJob | undefined) {
   if (!e || typeof e.jobId !== 'string') return;
   const previous = jobs.get(e.jobId);
+  jobs.delete(e.jobId);
   jobs.set(e.jobId, e);
+  const title = titleOf(e);
   if (previous?.state !== e.state) {
-    const title = titleOf(e.jobId);
     if (e.state === 'done') {
       toast(e.updated ? `${title} was updated on TONE3000 since this rig was saved` : `${title} added to your library`, 'info');
     } else if (e.state === 'failed') {
       toast(e.error === 'gone' ? `${title} is no longer on TONE3000` : `Couldn't download ${title}: ${e.error ?? 'unknown error'}`);
     }
   }
+  prune();
   for (const fn of [...listeners]) fn(e);
 }
 
@@ -171,10 +192,16 @@ export interface DownloadArgs {
   addNode?: { type: 'NamAmp' | 'CabIR'; index: number };
 }
 
-/** tone3000Download; `title` names the tone in the toasts the job's events produce. Resolves with the job id. */
+/** tone3000Download; `title` names the download in the toasts its events produce (known before the reply, so an
+    early event is named too). Resolves with the job id. */
 export async function startDownload(args: DownloadArgs, title?: string): Promise<string> {
   startJobEvents();
-  const { jobId } = await call<{ jobId: string }>('tone3000Download', args);
-  if (title) titles.set(jobId, title);
-  return jobId;
+  if (title) pendingTitles.set(args.modelId, title);
+  try {
+    const { jobId } = await call<{ jobId: string }>('tone3000Download', args);
+    if (title && !titles.has(jobId)) titles.set(jobId, title);
+    return jobId;
+  } finally {
+    if (title && pendingTitles.get(args.modelId) === title) pendingTitles.delete(args.modelId);
+  }
 }
