@@ -7,6 +7,9 @@
 
 namespace amp::online
 {
+// Limit: JUCE reports a connection dropped mid-body as a clean end of stream. With a Content-Length the transport
+// detects the shortfall ("download interrupted"); without one a truncated download looks like a success, so callers
+// must validate downloaded content (DownloadManager does via validateAssetFile).
 class JuceHttpTransport final : public HttpTransport
 {
 public:
@@ -47,9 +50,12 @@ struct RedirectDecision
 
 // Decides what to do with a hop to nextUrl. originalUrl is the URL the caller asked for; authorizationStillSent is
 // whether the hop that was just answered still carried the Authorization header. A hop to another scheme/host/port
-// than the original drops the header for good; an https -> http hop is refused; a non-http(s) target is refused.
+// than the original drops the header for good; an https -> http hop is refused; a non-http(s) target (or one whose
+// authority has userinfo, a backslash or control characters) is refused as "unsupported URL". bodyOnNextHop: the hop
+// would still send the request body (307/308 on a POST); to another origin that is refused ("refused cross-origin
+// redirect") because the body can carry an authorization code or refresh token.
 RedirectDecision decideRedirect(const juce::String& originalUrl, const juce::String& currentUrl,
-                                const juce::String& nextUrl, bool authorizationStillSent);
+                                const juce::String& nextUrl, bool authorizationStillSent, bool bodyOnNextHop);
 
 // 301, 302, 303, 307, 308.
 bool isFollowedRedirectStatus(int status);

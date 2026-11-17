@@ -30,8 +30,13 @@ TEST_CASE("online_http_live: robots.txt streams to a file with progress", "[live
     if (! networkTestsEnabled())
         SKIP("set AMP_NETWORK_TESTS=1");
 
-    auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                   .getChildFile("amp-http-live-" + juce::String::toHexString(juce::Random::getSystemRandom().nextInt64()));
+    struct TempDir
+    {
+        juce::File dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                             .getChildFile("amp-http-live-" + juce::Uuid().toString());
+        ~TempDir() { dir.deleteRecursively(); }
+    } temp;
+    const auto& dir = temp.dir;
     const auto target = dir.getChildFile("nested").getChildFile("robots.txt");
 
     int progressCalls = 0;
@@ -53,5 +58,4 @@ TEST_CASE("online_http_live: robots.txt streams to a file with progress", "[live
     REQUIRE(target.getSize() > 0);
     REQUIRE(progressCalls >= 1);
     REQUIRE(last == target.getSize());
-    dir.deleteRecursively();
 }

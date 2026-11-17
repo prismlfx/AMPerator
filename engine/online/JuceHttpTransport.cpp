@@ -14,6 +14,21 @@ struct Parts
     bool valid = false;
 };
 
+bool validScheme(const juce::String& s)
+{
+    return s.isNotEmpty() && juce::CharacterFunctions::isLetter(s[0])
+           && s.containsOnly("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-.");
+}
+
+// Redirect targets must not smuggle a different host through userinfo, backslashes or control characters.
+bool authorityIsPlain(const juce::String& authority)
+{
+    for (auto c : authority)
+        if (c == '\\' || c == '@' || c < 0x21 || c == 0x7f)
+            return false;
+    return true;
+}
+
 Parts split(const juce::String& url)
 {
     Parts p;
@@ -23,6 +38,8 @@ Parts split(const juce::String& url)
         rest = rest.substring(0, frag);
     const auto schemeEnd = rest.indexOf("://");
     if (schemeEnd <= 0)
+        return p;
+    if (! validScheme(rest.substring(0, schemeEnd)))
         return p;
     p.scheme = rest.substring(0, schemeEnd).toLowerCase();
     rest = rest.substring(schemeEnd + 3);
@@ -115,12 +132,13 @@ juce::String resolveRedirect(const juce::String& currentUrl, const juce::String&
     if (location.startsWith("//"))
     {
         auto p = split(base.scheme + ":" + location);
-        return p.valid ? join(p) : juce::String();
+        return p.valid && authorityIsPlain(p.authority) ? join(p) : juce::String();
     }
-    if (location.indexOf("://") > 0)
+    const auto schemeEnd = location.indexOf("://");
+    if (schemeEnd > 0 && validScheme(location.substring(0, schemeEnd)))
     {
         auto p = split(location);
-        return p.valid ? join(p) : juce::String();
+        return p.valid && authorityIsPlain(p.authority) ? join(p) : juce::String();
     }
 
     auto withoutFragment = location;
@@ -149,12 +167,13 @@ juce::String resolveRedirect(const juce::String& currentUrl, const juce::String&
 }
 
 RedirectDecision decideRedirect(const juce::String& originalUrl, const juce::String& currentUrl,
-                                const juce::String& nextUrl, bool authorizationStillSent)
+                                const juce::String& nextUrl, bool authorizationStillSent, bool bodyOnNextHop)
 {
     RedirectDecision d;
     d.sendAuthorization = authorizationStillSent;
     const auto original = originOf(originalUrl), current = originOf(currentUrl), next = originOf(nextUrl);
-    if (! next.valid())
+    const auto nextParts = split(nextUrl);
+    if (! next.valid() || ! authorityIsPlain(nextParts.authority))
     {
         d.action = RedirectDecision::Action::refuse;
         d.sendAuthorization = false;
@@ -169,7 +188,14 @@ RedirectDecision decideRedirect(const juce::String& originalUrl, const juce::Str
         return d;
     }
     if (! original.valid() || next != original)
+    {
         d.sendAuthorization = false;
+        if (bodyOnNextHop) // 307/308: the body (an OAuth code, a refresh token) must not leave the origin either
+        {
+            d.action = RedirectDecision::Action::refuse;
+            d.error = "refused cross-origin redirect";
+        }
+    }
     return d;
 }
 
@@ -297,12 +323,14 @@ HttpResponse JuceHttpTransport::request(const HttpRequest& req)
                 return failure(res, "too many redirects");
 
             const auto next = http::resolveRedirect(currentUrl, location);
-            const auto decision = http::decideRedirect(req.url, currentUrl, next, sendAuthorization);
+            const bool becomesGet = http::redirectBecomesGet(status, method);
+            const auto decision = http::decideRedirect(req.url, currentUrl, next, sendAuthorization,
+                                                       hasBody && ! becomesGet);
             if (decision.action == http::RedirectDecision::Action::refuse)
                 return failure(res, decision.error);
 
             sendAuthorization = decision.sendAuthorization;
-            if (http::redirectBecomesGet(status, method))
+            if (becomesGet)
             {
                 method = "GET";
                 body = {};
@@ -316,8 +344,10 @@ HttpResponse JuceHttpTransport::request(const HttpRequest& req)
         if (req.toFile != juce::File() && success)
         {
             const auto file = req.toFile;
+            std::unique_ptr<juce::FileOutputStream> out;
             auto fail = [&](const juce::String& error)
             {
+                out.reset(); // close before deleting
                 file.deleteFile();
                 return failure(res, error);
             };
@@ -325,8 +355,8 @@ HttpResponse JuceHttpTransport::request(const HttpRequest& req)
             if (! file.getParentDirectory().createDirectory())
                 return failure(res, "cannot create the download folder");
             file.deleteFile(); // FileOutputStream appends
-            juce::FileOutputStream out(file);
-            if (out.failedToOpen())
+            out = std::make_unique<juce::FileOutputStream>(file);
+            if (out->failedToOpen())
                 return failure(res, "cannot write the download file");
 
             auto total = headerValue(responseHeaders, "Content-Length").getLargeIntValue();
@@ -344,14 +374,14 @@ HttpResponse JuceHttpTransport::request(const HttpRequest& req)
                 const auto n = stream->read(buffer, chunkBytes);
                 if (n <= 0)
                     break;
-                if (! out.write(buffer, (size_t) n))
+                if (! out->write(buffer, (size_t) n))
                     return fail("cannot write the download file");
                 received += n;
                 if (req.onProgress)
                     req.onProgress(received, total);
             }
-            out.flush();
-            if (out.getStatus().failed())
+            out->flush();
+            if (out->getStatus().failed())
                 return fail("cannot write the download file");
             if (total >= 0 && received < total)
                 return fail("download interrupted");

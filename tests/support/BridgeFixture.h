@@ -12,6 +12,7 @@
 #include "online/SecureStore.h"
 
 #include "FakeAudioDevice.h"
+#include "FakeHttp.h"
 #include "FakePlugins.h"
 
 namespace amp_test
@@ -78,6 +79,7 @@ struct Fixture
             manager->addAudioDeviceType(std::move(type)); // never touches CoreAudio
             o.deviceManager = manager.get();
         }
+        o.httpTransport = std::make_unique<FakeHttp>(); // no routes: never the real network
         if (configureOptions)
             configureOptions(o);
         engine = std::make_unique<amp::Engine>(std::move(o));
