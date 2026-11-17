@@ -16,9 +16,10 @@ namespace amp::online
 struct AuthConfig
 {
     juce::String clientId, baseUrl { "https://www.tone3000.com" }, redirectUri { "http://127.0.0.1/callback" };
+    juce::String storeKey { "tokens" }; // SecureStore key of the tokens (the service uses the client id)
 };
 
-// Stored under the key "tokens" as JSON {access, refresh, expiresAtMs}.
+// Stored under AuthConfig::storeKey as JSON {access, refresh, expiresAtMs}.
 struct Tokens
 {
     juce::String access, refresh;
@@ -74,6 +75,6 @@ private:
     juce::CriticalSection pendingLock; // guards state / verifier only; never held across network I/O
     juce::String pendingState, pendingVerifier;
     juce::CriticalSection refreshLock; // makes refresh single-flight (held across the refresh request)
-    juce::CriticalSection stateLock;   // short, no I/O beyond the store: every read-modify-write of "tokens"
+    juce::CriticalSection stateLock;   // short, no I/O beyond the store: every read-modify-write of the tokens
 };
 } // namespace amp::online

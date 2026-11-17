@@ -6,7 +6,6 @@ namespace amp::online
 {
 namespace
 {
-const juce::String tokensKey = "tokens";
 constexpr juce::int64 refreshMarginMs = 60000;
 constexpr juce::int64 defaultLifetimeSec = 3600;
 
@@ -47,7 +46,7 @@ juce::String Tone3000Auth::authUrl(const juce::String& path) const
 
 std::optional<Tokens> Tone3000Auth::loadTokens() const
 {
-    auto raw = store.get(tokensKey);
+    auto raw = store.get(config.storeKey);
     if (! raw)
         return std::nullopt;
     auto parsed = juce::JSON::parse(*raw);
@@ -69,7 +68,7 @@ bool Tone3000Auth::saveTokens(const Tokens& t)
     obj->setProperty("access", t.access);
     obj->setProperty("refresh", t.refresh);
     obj->setProperty("expiresAtMs", t.expiresAtMs);
-    return store.set(tokensKey, juce::JSON::toString(juce::var(obj.release()), true));
+    return store.set(config.storeKey, juce::JSON::toString(juce::var(obj.release()), true));
 }
 
 bool Tone3000Auth::parseTokens(const juce::String& body, const juce::String& keepRefresh, Tokens& out) const
@@ -240,7 +239,7 @@ juce::String Tone3000Auth::accessToken(juce::String& error, bool forceRefresh)
                     result = stored->access; // a newer sign-in won; use it, leave it alone
                 else if (revoked)
                 {
-                    store.remove(tokensKey);
+                    store.remove(config.storeKey);
                     signedOut = true;
                     error = "signed out";
                 }
@@ -262,7 +261,7 @@ bool Tone3000Auth::removeIfStillHolding(const juce::String& refresh)
     const auto stored = loadTokens();
     if (! stored || stored->refresh != refresh)
         return false;
-    store.remove(tokensKey);
+    store.remove(config.storeKey);
     return true;
 }
 
@@ -272,7 +271,7 @@ void Tone3000Auth::clear()
     {
         const juce::ScopedLock state(stateLock);
         was = loadTokens().has_value();
-        store.remove(tokensKey);
+        store.remove(config.storeKey);
     }
     if (was && onSignedOut)
         onSignedOut();

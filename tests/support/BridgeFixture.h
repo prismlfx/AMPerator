@@ -9,6 +9,7 @@
 
 #include "Engine.h"
 #include "bridge/Bridge.h"
+#include "online/SecureStore.h"
 
 #include "FakeAudioDevice.h"
 #include "FakePlugins.h"
@@ -36,12 +37,19 @@ struct Fixture
     juce::File lib = dir.getChildFile("lib");
     juce::File data = dir.getChildFile("data");
     std::unique_ptr<juce::AudioDeviceManager> manager; // only for the fake-device test
-    FakeType* fakeType = nullptr;              // owned by `manager`
+    FakeType* fakeType = nullptr;                      // owned by `manager`
     std::unique_ptr<amp::Engine> engine;
     std::vector<juce::var> sent;
     int nextId = 1;
+    // Called by every start(): before the Engine is built (to add options) and right after (to set hooks).
+    std::function<void(amp::Engine::Options&)> configureOptions;
+    std::function<void(amp::Engine&)> configureEngine;
 
-    Fixture() { start(); }
+    explicit Fixture(bool startNow = true)
+    {
+        if (startNow)
+            start();
+    }
     ~Fixture()
     {
         engine.reset();
@@ -61,6 +69,7 @@ struct Fixture
         o.pluginFormats.push_back(std::make_unique<FakeFormat>());
         o.addDefaultPluginFormats = false;
         o.trashFile = [](const juce::File& f) { return f.deleteFile(); }; // never the user's Trash
+        o.secureStore = std::make_unique<amp::online::MemorySecureStore>(); // never the Keychain
         if (withFakeDevice)
         {
             manager = std::make_unique<juce::AudioDeviceManager>();
@@ -69,9 +78,13 @@ struct Fixture
             manager->addAudioDeviceType(std::move(type)); // never touches CoreAudio
             o.deviceManager = manager.get();
         }
+        if (configureOptions)
+            configureOptions(o);
         engine = std::make_unique<amp::Engine>(std::move(o));
         sent.clear();
         engine->bridge().send = [this](const juce::var& m) { sent.push_back(m); };
+        if (configureEngine)
+            configureEngine(*engine);
     }
 
     juce::var raw(const juce::var& message)

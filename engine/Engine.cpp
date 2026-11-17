@@ -1,6 +1,7 @@
 #include "Engine.h"
 
 #include "bridge/Bridge.h"
+#include "online/Tone3000Service.h"
 #include "storage/AtomicFile.h"
 
 namespace amp
@@ -87,6 +88,22 @@ Engine::Engine(Options o)
         userArt = json::object();
 
     applyAssetRoots();
+
+    const auto clientId = o.tone3000ClientId.isNotEmpty()            ? o.tone3000ClientId
+                          : settings.tone3000ClientId.isNotEmpty() ? settings.tone3000ClientId
+                                                                   : compiledTone3000ClientId();
+    http = std::move(o.httpTransport);
+    secureStore = std::move(o.secureStore);
+    if (clientId.isNotEmpty()) // otherwise no service: nothing touches the store or the network
+    {
+        if (http == nullptr)
+            http = online::makeNullHttpTransport();
+        if (secureStore == nullptr)
+            secureStore = online::makePlatformSecureStore("com.amperator.tone3000");
+        tone3000 = std::make_unique<online::Tone3000Service>(
+            online::Tone3000Service::Deps { clientId, *http, *secureStore, dataDir, libraryRoot, assets });
+        tone3000->emit = [this](const juce::String& name, const juce::var& data) { bridge().emit(name, data); };
+    }
 
     // Plugins are not scanned at startup (rescanPlugins does that); a leftover crash marker blacklists its plugin.
     plugins = std::make_unique<PluginHost>(dataDir, std::move(o.pluginFormats), o.addDefaultPluginFormats);
@@ -193,6 +210,7 @@ void Engine::startAudio(bool permissionGranted)
 
 Engine::~Engine()
 {
+    tone3000.reset(); // cancels downloads and joins its workers while everything it uses still exists
     if (live && beforeNodesReplaced)
         beforeNodesReplaced(false);
     if (live)
@@ -610,6 +628,7 @@ CommandResult Engine::getState()
         { "favorites", json::strings(settings.favoriteRigIds) },
         { "recents", json::strings(settings.recentRigIds) },
         { "bands", json::strings(store.bands()) },
+        { "tone3000", tone3000Status().result },
     }));
 }
 } // namespace amp

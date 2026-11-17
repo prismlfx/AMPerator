@@ -19,6 +19,8 @@
 #include "dsp/TunerTap.h"
 #include "engine/RealtimeEngine.h"
 #include "model/RigDocument.h"
+#include "online/HttpTransport.h"
+#include "online/SecureStore.h"
 #include "plugins/PluginHost.h"
 #include "storage/RigLoader.h"
 #include "storage/RigStore.h"
@@ -32,6 +34,10 @@ juce::String engineVersion();
 juce::String compiledTone3000ClientId();
 
 class Bridge;
+namespace online
+{
+class Tone3000Service;
+}
 
 /** Outcome of one bridge command: `result` (an object, may be void) on success, `error` otherwise. `pending`: the
     handler took a Bridge::deferReply() completion and replies through it later (see Bridge::deferReply). */
@@ -92,6 +98,13 @@ public:
         bool deferAudioStart = false;
         /** How deleteRig disposes of rig files; null = the system trash (juce::File::moveToTrash). */
         std::function<bool(const juce::File&)> trashFile;
+        /** TONE3000 network access; null = no network yet (every request fails "network transport not available"). */
+        std::unique_ptr<online::HttpTransport> httpTransport;
+        /** Where TONE3000 tokens live; null = the platform store (Keychain service "com.amperator.tone3000"). */
+        std::unique_ptr<online::SecureStore> secureStore;
+        /** TONE3000 client id; empty = settings.tone3000ClientId, else compiledTone3000ClientId(). Read once here: a
+            later setSettings{tone3000ClientId} takes effect at the next launch. All empty = not configured. */
+        juce::String tone3000ClientId;
     };
 
     explicit Engine(Options);
@@ -110,6 +123,13 @@ public:
         edit or a device-rate rebuild of the current rig (sameRig = true) -- and from ~Engine. Every plugin instance
         handed to onOpenPluginEditor is destroyed after this returns, so the app must close their editors here. */
     std::function<void(bool sameRig)> beforeNodesReplaced;
+    /** The app opens the TONE3000 sign-in window at `url` and calls done(query) with the query of the first request
+        starting with `redirectPrefix`, or done("") when the user closes the window. Null = "not available". */
+    std::function<void(const juce::String& url, const juce::String& redirectPrefix,
+                       std::function<void(const juce::String& query)> done)>
+        onOpenAuthWindow;
+    /** The app clears the sign-in window's cookie store (tone3000Disconnect). */
+    std::function<void()> onClearAuthCookies;
 
     /** The file the app's resource provider serves for a web view request `path` ("/art/<relative path>"): an
         existing image (png, jpg, jpeg, gif, webp, svg) inside the library's Art/ folder. Anything else -- other
@@ -191,6 +211,12 @@ public:
     /** action = "save" (save, then quit), "discard" (quit) or "cancel" (stay). */
     CommandResult confirmQuit(const juce::String& action);
 
+    // TONE3000 (CommandsOnline.cpp). Without a client id every one but tone3000Status fails "not configured".
+    CommandResult tone3000Status(); // Tone3000Status
+    /** Deferred: replies when the sign-in window is done, {connected, user} or {canceled: true}. */
+    CommandResult tone3000Connect();
+    CommandResult tone3000Disconnect(); // {}
+
 private:
     struct TunerPreparer;
 
@@ -267,6 +293,12 @@ private:
     juce::TimedCallback meterTimer { [this] { emitMeter(); } };
     juce::TimedCallback tunerTimer { [this] { pollTuner(); } };
     juce::TimedCallback statusTimer { [this] { pollStatus(); } };
+
+    // TONE3000: the service references the transport, the store and `assets`, so it is declared after them (and
+    // destroyed first in ~Engine). Not configured: no service, and only injected units (unused).
+    std::unique_ptr<online::HttpTransport> http;
+    std::unique_ptr<online::SecureStore> secureStore;
+    std::unique_ptr<online::Tone3000Service> tone3000;
 
     std::unique_ptr<Bridge> bridgePtr;
 

@@ -26,6 +26,7 @@ add_library(amp_engine STATIC
   bridge/Bridge.h
   bridge/CommandsRig.cpp
   bridge/CommandsSystem.cpp
+  bridge/CommandsOnline.cpp
   audio/AudioIO.cpp
   audio/AudioIO.h
   control/ControlEvent.h
@@ -51,6 +52,8 @@ add_library(amp_engine STATIC
   online/Tone3000Auth.h
   online/Tone3000Client.cpp
   online/Tone3000Client.h
+  online/Tone3000Service.cpp
+  online/Tone3000Service.h
   online/Tone3000Types.cpp
   online/Tone3000Types.h
   online/KeychainStore.cpp

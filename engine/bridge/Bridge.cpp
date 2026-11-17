@@ -252,6 +252,9 @@ const std::map<juce::String, Handler>& commands()
         { "restoreBackup", [](Engine& e, const juce::var& a) { return e.restoreBackup(nonEmpty(a, "id")); } },
         { "setNodeArt", [](Engine& e, const juce::var& a)
           { return e.setNodeArt(nonEmpty(a, "id"), optStr(a, "archetype"), optStr(a, "imageFile")); } },
+        { "tone3000Status", [](Engine& e, const juce::var&) { return e.tone3000Status(); } },
+        { "tone3000Connect", [](Engine& e, const juce::var&) { return e.tone3000Connect(); } },
+        { "tone3000Disconnect", [](Engine& e, const juce::var&) { return e.tone3000Disconnect(); } },
     };
     return table;
 }
