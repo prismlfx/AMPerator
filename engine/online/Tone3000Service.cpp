@@ -13,17 +13,6 @@ namespace amp::online
 {
 namespace
 {
-class NullHttpTransport final : public HttpTransport
-{
-public:
-    HttpResponse request(const HttpRequest&) override
-    {
-        HttpResponse r;
-        r.error = "network transport not available";
-        return r;
-    }
-};
-
 juce::var object(std::initializer_list<std::pair<const char*, juce::var>> props)
 {
     auto* o = new juce::DynamicObject();
@@ -60,8 +49,6 @@ AuthConfig authConfig(const juce::String& clientId)
     return c;
 }
 } // namespace
-
-std::unique_ptr<HttpTransport> makeNullHttpTransport() { return std::make_unique<NullHttpTransport>(); }
 
 juce::var Tone3000Status::toVar() const
 {

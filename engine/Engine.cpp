@@ -1,6 +1,7 @@
 #include "Engine.h"
 
 #include "bridge/Bridge.h"
+#include "online/JuceHttpTransport.h"
 #include "online/Tone3000Service.h"
 #include "storage/AtomicFile.h"
 
@@ -97,7 +98,7 @@ Engine::Engine(Options o)
     if (clientId.isNotEmpty()) // otherwise no service: nothing touches the store or the network
     {
         if (http == nullptr)
-            http = online::makeNullHttpTransport();
+            http = std::make_unique<online::JuceHttpTransport>();
         if (secureStore == nullptr)
             secureStore = online::makePlatformSecureStore("com.amperator.tone3000");
         tone3000 = std::make_unique<online::Tone3000Service>(

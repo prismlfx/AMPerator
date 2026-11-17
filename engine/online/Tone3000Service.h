@@ -40,9 +40,6 @@ struct Tone3000Status
     juce::var toVar() const;
 };
 
-// Until the real transport exists: every request fails with "network transport not available".
-std::unique_ptr<HttpTransport> makeNullHttpTransport();
-
 class Tone3000Service
 {
 public:

@@ -41,6 +41,8 @@ add_library(amp_engine STATIC
   online/DownloadManager.cpp
   online/DownloadManager.h
   online/HttpTransport.h
+  online/JuceHttpTransport.cpp
+  online/JuceHttpTransport.h
   online/Placement.cpp
   online/Placement.h
   online/Pkce.cpp
