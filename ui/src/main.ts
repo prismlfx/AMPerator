@@ -164,7 +164,15 @@ async function downloadMissing() {
     render(store.get());
   }
 }
-onJob(() => render(store.get())); // the Download button follows the jobs
+// The Download button follows the jobs. Only a job's state matters to the banners: progress ticks would redraw them
+// (role="alert") several times a second, re-announcing them and swallowing a Dismiss click.
+const jobStates = new Map<string, string>();
+onJob((job) => {
+  if (jobStates.get(job.jobId) === job.state) return;
+  if (job.state === 'done' || job.state === 'failed') jobStates.delete(job.jobId);
+  else jobStates.set(job.jobId, job.state);
+  render(store.get());
+});
 
 function render(s: AppState) {
   syncRigFields(s);

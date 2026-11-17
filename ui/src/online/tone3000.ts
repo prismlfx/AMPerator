@@ -158,7 +158,7 @@ function onJobEvent(e: DownloadJob | undefined) {
   if (previous?.state !== e.state) {
     if (e.state === 'done') {
       toast(e.updated ? `${title} was updated on TONE3000 since this rig was saved` : `${title} added to your library`, 'info');
-    } else if (e.state === 'failed') {
+    } else if (e.state === 'failed' && e.error !== 'canceled') { // the user's own cancel (or a disconnect) needs no toast
       toast(e.error === 'gone' ? `${title} is no longer on TONE3000` : `Couldn't download ${title}: ${e.error ?? 'unknown error'}`);
     }
   }

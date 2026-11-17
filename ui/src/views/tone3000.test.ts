@@ -278,6 +278,14 @@ describe('online module', () => {
     expect(text).toContain('the model is no longer on TONE3000');
   });
 
+  it('a canceled job is not toasted', async () => {
+    await started(connected);
+    event('tone3000Download', job('downloading', { progress: 0.2 }));
+    event('tone3000Download', job('failed', { error: 'canceled' }));
+    expect(document.getElementById('toasts')?.textContent ?? '').not.toContain("Couldn't download");
+    expect(online.jobsFor('m1').at(-1)!.state).toBe('failed');
+  });
+
   it('does not toast the same state twice and lets onJob listeners unsubscribe', async () => {
     await started(connected);
     const seen: string[] = [];
@@ -466,6 +474,47 @@ describe('tone detail', () => {
     expect(modal().querySelector('.tone-job-error')!.textContent).toContain('cancelled');
     expect(mbutton('Download').disabled).toBe(false);
     expect(modal().querySelector('progress')).toBeNull();
+  });
+
+  it('a double click starts one download; the actions stay disabled until the first job event', async () => {
+    await detail(fullTone());
+    mbutton('Add to rig').click();
+    mbutton('Add to rig').click();
+    mbutton('Download').click();
+    expect(commands('tone3000Download')).toHaveLength(1);
+    expect(mbutton('Add to rig').disabled).toBe(true);
+    expect(mbutton('Download').disabled).toBe(true);
+    juce.reply(last('tone3000Download').id, true, { jobId: 'j1' });
+    await flush();
+    expect(mbutton('Add to rig').disabled).toBe(true); // the reply alone does not re-enable
+    event('tone3000Download', { jobId: 'j1', modelId: 'm1', toneId: '9', state: 'queued', progress: 0 });
+    expect(mbutton('Add to rig').disabled).toBe(true); // running now
+    event('tone3000Download', { jobId: 'j1', modelId: 'm1', toneId: '9', state: 'done', progress: 1 });
+    expect(mbutton('Add to rig').disabled).toBe(false);
+    expect(commands('tone3000Download')).toHaveLength(1);
+  });
+
+  it('a start that fails re-enables the actions', async () => {
+    await detail(fullTone());
+    mbutton('Download').click();
+    expect(mbutton('Download').disabled).toBe(true);
+    juce.reply(last('tone3000Download').id, false, 'not connected');
+    await flush();
+    expect(mbutton('Download').disabled).toBe(false);
+    expect(document.getElementById('toasts')!.textContent).toContain('not connected');
+  });
+
+  it('links the creator only with the URL TONE3000 gave, through openExternal', async () => {
+    await detail(fullTone());
+    mbutton('View creator on TONE3000').click();
+    expect(natives('openExternal').at(-1)!.payload.params).toEqual(['https://www.tone3000.com/ada']);
+    modal().closest('.modal-backdrop')!.remove();
+    await detail(fullTone({ creator: { ...user, username: 'jane', url: '' } }));
+    expect(mbutton('View creator on TONE3000')).toBeUndefined();
+    expect(mbutton('View on TONE3000')).toBeDefined(); // the tone link stays
+    modal().closest('.modal-backdrop')!.remove();
+    await detail(fullTone({ creator: { ...user, url: 'https://evil.example/ada' } }));
+    expect(mbutton('View creator on TONE3000')).toBeUndefined();
   });
 
   it('shows the progress of an already running job for the selected model', async () => {

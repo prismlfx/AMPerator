@@ -250,6 +250,8 @@ describe('TONE3000 section', () => {
   it('says when the sign-in will not be remembered', async () => {
     await openedWith(status({ remembered: false }));
     expect(section().textContent).toContain('Sign-in will not be remembered on this Mac.');
+    const line = [...section().querySelectorAll('p')].find((p) => p.textContent === 'Sign-in will not be remembered on this Mac.')!;
+    expect(line.className).toBe('muted'); // a styled class (.hint is only styled inside .settings-status)
   });
 
   it('follows status changes while open and stops after closing', async () => {

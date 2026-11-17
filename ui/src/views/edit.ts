@@ -536,14 +536,14 @@ export function renderEdit(root: HTMLElement): void {
   const signedIn = async () => store.get().tone3000.connected || (await connectTone3000());
 
   /** The TONE3000 picker for node `n` (signing in first), then the chosen tone's window targeted at the node. With
-      `replace` the picker opens on the tone the node's file came from, when the library knows it. */
+      `replace` the engine opens the picker on the tone the node's file came from (its provenance index outlives the
+      missing file), or the plain picker when it does not know it. */
   async function browseTone3000(n: RigNode, replace: boolean) {
     try {
       if (!(await signedIn())) return;
-      const loadTone = replace ? (await sourceInfo()).get(t3kModel(n))?.toneId : undefined;
       const r = await call<{ toneId?: string; canceled?: boolean }>(
         'tone3000Browse',
-        { format: assetKind(n.type), nodeId: n.id, ...(loadTone ? { loadTone } : {}) },
+        { format: assetKind(n.type), nodeId: n.id, ...(replace ? { replace: true } : {}) },
         LONG_CALL_MS,
       );
       if (!r.canceled && r.toneId) void openToneDetail(r.toneId, { nodeId: n.id });

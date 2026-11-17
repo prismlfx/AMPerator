@@ -83,6 +83,16 @@ describe('missing TONE3000 models banner', () => {
     expect(bannerButton('Download').disabled).toBe(false);
   });
 
+  it('progress ticks do not redraw the banners, a state change does', async () => {
+    await boot(connected, ['n3', 'n4']);
+    event('tone3000Download', { jobId: 'j1', modelId: 'm-n3', toneId: 't', nodeId: 'n3', state: 'downloading', progress: 0.2 });
+    const drawn = t3kBanner();
+    event('tone3000Download', { jobId: 'j1', modelId: 'm-n3', toneId: 't', nodeId: 'n3', state: 'downloading', progress: 0.6 });
+    expect(t3kBanner()).toBe(drawn); // the same element: a Dismiss click on it is not lost
+    event('tone3000Download', { jobId: 'j1', modelId: 'm-n3', toneId: 't', nodeId: 'n3', state: 'done', progress: 1 });
+    expect(bannerButton('Download').disabled).toBe(false);
+  });
+
   it('shows the error when the fetch fails', async () => {
     await boot(connected, ['n3']);
     bannerButton('Download').click();

@@ -276,7 +276,7 @@ export function tone3000View(status: Tone3000Status, settings: Partial<Settings>
   else {
     const line = status.connected ? `Connected as ${status.user?.username ?? 'your account'}` : 'Not connected';
     out.push(el('p', { class: 'tone3000-status' }, line));
-    if (!status.remembered) out.push(el('p', { class: 'hint' }, 'Sign-in will not be remembered on this Mac.'));
+    if (!status.remembered) out.push(el('p', { class: 'muted' }, 'Sign-in will not be remembered on this Mac.'));
     const button = el('button', { class: 'button small', type: 'button' }, status.connected ? 'Disconnect' : 'Connect TONE3000');
     button.disabled = status.busy;
     button.addEventListener('click', () => (status.connected ? actions.disconnect() : actions.connect()));

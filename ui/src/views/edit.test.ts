@@ -555,26 +555,18 @@ describe('TONE3000', () => {
     expect(document.body.textContent).toContain('not connected');
   });
 
-  it('Replace from TONE3000… opens the picker on the known tone, or plain when unknown', async () => {
-    await started(t3kRig(), { ...emptyReport, placeholderNodeIds: ['amp'], fetchable: ['amp'] }, connected);
-    edit.renderEdit(root);
-    await flush();
-    await assetsReply(sourced)();
-    buttonIn('amp', 'Replace from TONE3000…')!.click();
-    await flush();
-    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Browse', args: { format: 'nam', nodeId: 'amp', loadTone: 't9' } });
-  });
-
-  it('Replace from TONE3000… omits loadTone when the library does not know the tone', async () => {
+  it('Replace from TONE3000… asks the engine to reopen the node\'s tone (replace: true, no loadTone)', async () => {
     await started(t3kRig(), { ...emptyReport, placeholderNodeIds: ['amp'], fetchable: ['amp'] }, connected);
     edit.renderEdit(root);
     await flush();
     for (const c of juce.commands().filter((c) => c.cmd === 'listAssets')) juce.reply(c.id, true, { assets: [] });
     await flush();
+    const before = juce.commands().filter((c) => c.cmd === 'listAssets').length;
     buttonIn('amp', 'Replace from TONE3000…')!.click();
     await flush();
-    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Browse', args: { format: 'nam', nodeId: 'amp' } });
+    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Browse', args: { format: 'nam', nodeId: 'amp', replace: true } });
     expect('loadTone' in (lastCommand().args as object)).toBe(false);
+    expect(juce.commands().filter((c) => c.cmd === 'listAssets').length).toBe(before); // no lookup of its own
   });
 
   it('a card with a TONE3000 source shows the T3K mark, and its title and creator when expanded', async () => {

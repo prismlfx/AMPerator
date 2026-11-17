@@ -102,7 +102,10 @@ export async function openToneDetail(toneId: string, target?: DetailTarget): Pro
   const facts = el('div', { class: 'tone-detail-facts' });
   const formatName = format === 'ir' ? 'IR' : format === 'nam' ? 'NAM' : (tone.format ?? '');
   facts.append(el('div', { class: 'tone-meta' }, ...(tone.gear ? [el('span', { class: 'tone-gear muted' }, tone.gear)] : []), el('span', { class: 'format-badge' }, formatName)));
-  facts.append(el('div', { class: 'tone-creator' }, avatar(tone.creator?.avatarUrl), tone.creator?.username ?? ''));
+  const creator = el('div', { class: 'tone-creator' }, avatar(tone.creator?.avatarUrl), tone.creator?.username ?? '');
+  // The creator's page as TONE3000 gives it; never a URL built here (spec §9.4, §10.5).
+  if ((tone.creator?.url ?? '').startsWith(`${TONE3000_URL}/`)) creator.append(link('View creator on TONE3000', tone.creator.url));
+  facts.append(creator);
   const licenseText = tone.license ? licenseLabel(tone.license) : '';
   if (licenseText) facts.append(el('div', { class: 'muted tone-license' }, licenseText));
   if ((tone.url ?? '').startsWith(`${TONE3000_URL}/`)) facts.append(link('View on TONE3000', tone.url));
@@ -130,13 +133,24 @@ export async function openToneDetail(toneId: string, target?: DetailTarget): Pro
   modal.body.append(el('label', { class: 'tone-model-label' }, 'Model', select), progress, actions);
   if (!supported) modal.body.append(el('p', { class: 'muted' }, "AMPerator can't load this format."));
 
+  // From the click until the job's first event (or a failed start) the actions stay disabled: a double click must
+  // not start a second job or add a second node.
+  let starting = false;
+  let startedJob = '';
   const start = async (extra: Omit<DownloadArgs, 'modelId' | 'toneId'>) => {
+    if (starting) return;
+    starting = true;
+    startedJob = '';
+    sync();
     const m = selected();
     try {
-      await startDownload({ modelId: m.id, toneId: tone.id, ...extra }, `${tone.title} — ${m.name}`);
+      startedJob = await startDownload({ modelId: m.id, toneId: tone.id, ...extra }, `${tone.title} — ${m.name}`);
+      if (jobsFor(m.id).some((j) => j.jobId === startedJob)) starting = false; // its event beat the reply
     } catch (e) {
+      starting = false;
       toast((e as Error).message);
     }
+    sync();
   };
   download.addEventListener('click', () => void start({}));
   place.addEventListener('click', () => {
@@ -155,11 +169,15 @@ export async function openToneDetail(toneId: string, target?: DetailTarget): Pro
     } else if (job?.state === 'failed') {
       progress.append(el('p', { class: 'tone-job-error' }, job.error === 'gone' ? 'This model is no longer on TONE3000.' : `Download failed: ${job.error ?? 'unknown error'}`));
     }
-    download.disabled = !supported || running;
-    place.disabled = !supported || running || (!target?.nodeId && !rigNodes());
+    download.disabled = !supported || running || starting;
+    place.disabled = !supported || running || starting || (!target?.nodeId && !rigNodes());
   }
   select.addEventListener('change', sync);
-  unsubscribes.push(onJob(sync), store.subscribe(sync));
+  const onJobEvent = (job: { jobId: string }) => {
+    if (starting && startedJob && job.jobId === startedJob) starting = false;
+    sync();
+  };
+  unsubscribes.push(onJob(onJobEvent), store.subscribe(sync));
   sync();
 }
 
