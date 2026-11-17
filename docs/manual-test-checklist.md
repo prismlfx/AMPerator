@@ -69,6 +69,8 @@ Browsing and downloading
 - [ ] An IR tone loads into a CabIR node and sounds right.
 - [ ] The T3K mark and the creator line show on the node of a TONE3000 model; "View on TONE3000" opens tone3000.com in the default browser, and a non-TONE3000 link never does.
 - [ ] Downloading the same model twice finishes at once without a second file; two different tones with the same name get ` (2)`.
+- [ ] `<dataDir>/tone3000/index.json` of a fresh download has license, creator and toneUrl filled in; the tone detail shows "View creator on TONE3000" next to the creator.
+- [ ] model_url is on www.tone3000.com and downloads correctly (JUCE re-encodes query strings).
 - [ ] Cancel during a download leaves no partial file; quitting during a download leaves `<dataDir>/tone3000/.partial` empty after relaunch.
 
 Restoring and replacing
@@ -79,6 +81,8 @@ Restoring and replacing
 Offline and limits
 - [ ] Offline launch keeps local playback working; the TONE3000 lists show "Can't reach TONE3000" with Retry, and Retry works once back online.
 - [ ] If TONE3000 answers with a rate limit, the message names the wait and nothing retries on its own.
+- [ ] Quit and Disconnect stay responsive while a download is stalled (e.g. pull the network mid-download).
+- [ ] After a session, ~/Library/Caches/<bundle id>/Cache.db holds no TONE3000 API responses or Authorization headers.
 
 Release
 - [ ] The placeholder logos in `ui/src/brand/tone3000/` are replaced with the official ones from TONE3000's logo pack, and "Powered by TONE3000" links to https://www.tone3000.com, before a public release.

@@ -102,6 +102,8 @@ AMPerator reads a USB footswitch directly over HID so pedal presses control the 
 
 ### TONE3000
 
+> **Status:** This integration has been verified against test doubles only; it has not yet been run against the live TONE3000 service (see docs/manual-test-checklist.md).
+
 AMPerator can browse, download and restore amp models and IRs from [TONE3000](https://www.tone3000.com) without leaving the app. The library's **TONE3000** tab lists your favorites, downloads, creations, and what is trending or new; **Browse TONE3000** opens TONE3000's own tone picker (with audio previews) in a window inside AMPerator; picking a tone shows its models and a **Download** that puts the file into your library and, from a node's menu, straight onto that node (**Browse TONE3000…** / **Replace from TONE3000…**).
 
 - **Sign-in:** **Connect TONE3000** opens TONE3000's sign-in page in an in-app window: your email, then a one-time code they send you. AMPerator never sees a password; the window closes itself when you are in. The resulting tokens are kept in the macOS Keychain (service `com.amperator.tone3000`), never in a file. **Disconnect** (in Settings or on the TONE3000 tab) signs out and clears the window's session, so the next sign-in asks for the email again.
@@ -116,7 +118,7 @@ AMPerator can browse, download and restore amp models and IRs from [TONE3000](ht
 cmake -B build -G Xcode -DAMP_TONE3000_CLIENT_ID=t3k_pub_...
 ```
 
-Without it the build works as before and the TONE3000 tab says the build has no client id (every `tone3000*` bridge command answers `not configured`). Create a key in your own TONE3000 account under Settings → API Keys. The publishable key (`t3k_pub_…`) is public by design and safe to ship; never use the secret key anywhere in this project. A developer can also put a key in `settings.json` as `tone3000ClientId`, which overrides the compiled-in one the next time the app starts.
+Without it the build works as before and the TONE3000 tab says the build has no client id (`tone3000Status` answers `configured: false`; every other `tone3000*` bridge command answers `not configured`). Create a key in your own TONE3000 account under Settings → API Keys. The publishable key (`t3k_pub_…`) is public by design and safe to ship; never use the secret key anywhere in this project. A developer can also put a key in `settings.json` as `tone3000ClientId`, which overrides the compiled-in one the next time the app starts.
 
 **Live tests.** The TONE3000 tests run offline against fakes. The few tests that reach the real service (unauthenticated GET requests to www.tone3000.com only; they never sign in) are skipped unless you opt in: `AMP_NETWORK_TESTS=1 ctest --test-dir build -C Debug` (needs network access).
 

@@ -19,4 +19,6 @@
 
 ## Trademarks
 
+Powered by TONE3000 — https://www.tone3000.com
+
 TONE3000 logo and T3K mark — trademarks of TONE3000, used under its brand guidelines (tone3000.com/api, Design Requirements); not covered by this project's AGPL license. The files committed in `ui/src/brand/tone3000/` are plain-text placeholders and must be replaced with the official assets from TONE3000's logo pack before a public release.
