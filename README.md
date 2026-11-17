@@ -31,10 +31,9 @@ Open source under the AGPLv3. macOS today; the code is cross-platform (JUCE 8) a
 
 Sub-project 1 (the core rig engine) is complete: 261 C++ tests and 139 UI tests pass, including an offline audio regression suite. Real-hardware checks are tracked in [docs/manual-test-checklist.md](docs/manual-test-checklist.md). Planned next:
 
-1. **Tone library search** — find and download amp models and IRs from public libraries (TONE3000) inside the app.
-2. **AI tone builder** — "I want to play Interstate Love Song by STP" → the app finds the closest models, builds the chain, and you save it.
-3. **Advanced foot control** — tap/long-press, scenes (clean / crunch / lead per song), expression pedals.
-4. **Windows build** (ASIO).
+1. **AI tone builder** — "I want to play Interstate Love Song by STP" → the app finds the closest models, builds the chain, and you save it.
+2. **Advanced foot control** — tap/long-press, scenes (clean / crunch / lead per song), expression pedals.
+3. **Windows build** (ASIO).
 
 ## Build
 
@@ -100,6 +99,28 @@ AMPerator reads a USB footswitch directly over HID so pedal presses control the 
 - If your pedal sends keys other than the defaults, use **Assign L / M / R**: click, stomp, done. The dialog shows the last key code it saw.
 - Mapping a pedal to an effect: in Edit, right-click a card → **Learn footswitch**, then stomp. Mappings are saved in the rig; global defaults live in settings.
 - Any MIDI controller works the same way (notes and CCs).
+
+### TONE3000
+
+AMPerator can browse, download and restore amp models and IRs from [TONE3000](https://www.tone3000.com) without leaving the app. The library's **TONE3000** tab lists your favorites, downloads, creations, and what is trending or new; **Browse TONE3000** opens TONE3000's own tone picker (with audio previews) in a window inside AMPerator; picking a tone shows its models and a **Download** that puts the file into your library and, from a node's menu, straight onto that node (**Browse TONE3000…** / **Replace from TONE3000…**).
+
+- **Sign-in:** **Connect TONE3000** opens TONE3000's sign-in page in an in-app window: your email, then a one-time code they send you. AMPerator never sees a password; the window closes itself when you are in. The resulting tokens are kept in the macOS Keychain (service `com.amperator.tone3000`), never in a file. **Disconnect** (in Settings or on the TONE3000 tab) signs out and clears the window's session, so the next sign-in asks for the email again.
+- **Where files land:** `Models/TONE3000/<creator>/<tone title> — <model name>.nam` and `IRs/TONE3000/<creator>/<tone title> — <model name>.wav` inside your library, as ordinary files you can move, rename or delete. Nothing is downloaded until you press Download (or the auto-download setting below fires); lists are never saved to disk.
+- **Attribution and licenses:** the creator, the license TONE3000 shows for the tone and a link back to its page are kept with every downloaded file (`tone3000/index.json` in the app's data folder) and shown with it in the library and on the node.
+- **Missing models:** a rig stores a reference to the TONE3000 model next to its file hash. If the file is gone, the rig still loads (the node is a bypassed placeholder) and a banner says `N models from TONE3000 are missing.` with a **Download** button that restores them. Settings → *Download missing TONE3000 models automatically when opening a rig* does the same on its own when a rig loads, only while you are signed in; it is off by default.
+- **Using it for free:** AMPerator uses TONE3000's free-tier API for non-commercial open-source use. Models remain the property of their creators and are used under the license shown with each tone.
+
+**Building with TONE3000 enabled.** The integration needs a TONE3000 publishable key (OAuth client id), compiled in:
+
+```sh
+cmake -B build -G Xcode -DAMP_TONE3000_CLIENT_ID=t3k_pub_...
+```
+
+Without it the build works as before and the TONE3000 tab says the build has no client id (every `tone3000*` bridge command answers `not configured`). Create a key in your own TONE3000 account under Settings → API Keys. The publishable key (`t3k_pub_…`) is public by design and safe to ship; never use the secret key anywhere in this project. A developer can also put a key in `settings.json` as `tone3000ClientId`, which overrides the compiled-in one the next time the app starts.
+
+**Live tests.** The TONE3000 tests run offline against fakes. The few tests that reach the real service (unauthenticated GET requests to www.tone3000.com only; they never sign in) are skipped unless you opt in: `AMP_NETWORK_TESTS=1 ctest --test-dir build -C Debug` (needs network access).
+
+Powered by [TONE3000](https://www.tone3000.com).
 
 ### Keyboard shortcuts (Stage)
 

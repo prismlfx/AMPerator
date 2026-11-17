@@ -12,12 +12,14 @@ called from `ui/src/bridge.ts` with JUCE's `__juce__invoke` / `__juce__complete`
 |---|---|---|---|
 | `amp` | one command envelope as a JSON string (an already-decoded object is accepted too) | `undefined`, immediately | Forwarded to `Bridge::handle`. The reply, like every event, arrives as a JUCE event named `amp` (`Bridge::send` → `emitEventIfBrowserIsVisible("amp", message)`). The UI correlates replies by `id` and gives up after 10 s. |
 | `chooseFolder` | — | the chosen absolute path, or `""` if cancelled | Native folder chooser (the web view has none); used to add watched folders. One chooser at a time (a second call completes with `""`). |
+| `openExternal` | one URL string | `true` if the link was opened in the default browser, else `false` | Only `https://www.tone3000.com` itself or a URL under `https://www.tone3000.com/` is allowed (`online::isAllowedExternalUrl`); anything else (other hosts, `http:`, a look-alike host such as `https://www.tone3000.com.evil.example`, a wrong argument count or type) completes `false` and launches nothing. Used for the "Powered by TONE3000", "View on TONE3000" and "Discover more on TONE3000" links. |
 
 **Node art** (`art/` resource path): the app's resource provider also serves images from the library's `Art/` folder
 at `getResourceProviderRoot() + "art/<path relative to Art/>"` (the page, served from the provider root, uses the
 relative URL `art/<path>`, each component URI-encoded). Only existing `png`/`jpg`/`jpeg`/`gif`/`webp`/`svg` files
 inside `Art/` are served (`Engine::artFileForRequest`): `..`, `.`, empty or `~` components, backslashes, colons,
-symlinks and every other file (e.g. `user-art.json`) get a 404. In dev mode the provider allows the dev-server origin,
+symlinks and every other file (e.g. `user-art.json`) get a 404. Downloaded TONE3000 tone images live in
+`Art/tone3000/<toneId>.<jpg|jpeg|png|webp|gif>` and are served like any other art file, at `art/tone3000/<toneId>.<ext>`. In dev mode the provider allows the dev-server origin,
 and the UI uses the absolute `juce://juce.backend/art/...` URL (macOS).
 
 **Plugin snapshots:** the first time a plugin is loaded (rig load or structural edit, before `rigLoaded` is sent), the
@@ -57,10 +59,12 @@ variable `AMP_UI_DEV=1` a Debug build of the app loads the Vite dev server at `h
 - `nodes` are listed in **signal order** (Input first, Output last; nodes off the chain follow).
 - `tags` is always present (`[]` when the rig has none): free-form labels such as a style, a decade, a band or a
   song (`setTags`).
-- every node carries `art: {archetype, image, snapshot}` — `archetype` is the rig's built-in art id (may be `""`),
-  `image` is the absolute path of a user-assigned image in `Art/` (or `""`), `snapshot` the absolute path of a cached
-  PNG of the plugin's editor in `Art/cache/` (Plugin nodes, or `""`). Neither file is stored in the rig file. The UI
-  loads both through the art resource path below and picks the picture in the spec §6 order (user image → provider
+- every node carries `art: {archetype, image, snapshot, providerImage}` — `archetype` is the rig's built-in art id (may
+  be `""`), `image` is the absolute path of a user-assigned image in `Art/` (or `""`), `snapshot` the absolute path of a
+  cached PNG of the plugin's editor in `Art/cache/` (Plugin nodes, or `""`), `providerImage` the absolute path of the
+  cached TONE3000 tone image in `Art/tone3000/` for a NamAmp/CabIR node whose file (found by its sha256) was downloaded
+  from TONE3000 (`""` otherwise, or when the image file is gone). None of these files is stored in the rig file. The UI
+  loads them through the art resource path below and picks the picture in the spec §6 order (user image → provider
   image → snapshot → archetype; `ui/src/art/archetypes.ts`). Built-in archetype ids: amps `british-stack`,
   `american-clean-combo`, `high-gain-rectifier`, `ac-chime`, `amp-generic`; cabs `cab-4x12`, `cab-2x12`,
   `cab-1x12-open`; pedals `drive`, `fuzz`, `delay`, `chorus`, `reverb`, `eq`, `gate`, `pedal-generic` (an unknown or
@@ -72,11 +76,44 @@ variable `AMP_UI_DEV=1` a Debug build of the app loads the Vite dev server at `h
 - After a load with a non-empty report the UI shows a banner listing the missing assets/plugins and the files matched by
   file name; placeholder NamAmp/CabIR nodes offer "Locate…" (asset picker → `setAsset`).
 
-**Report** (`report`): `{missingAssets: [file], missingPlugins: [name], placeholderNodeIds: [id], resolvedByFilename: [path]}`.
+**Report** (`report`): `{missingAssets: [file], missingPlugins: [name], placeholderNodeIds: [id], resolvedByFilename: [path], fetchable: [nodeId]}`.
 Placeholder nodes keep all their data but run as bypassed passthroughs; `toggleBypass`/`setParam` on them reply
-`ok:false`.
+`ok:false`. `fetchable` lists the placeholder NamAmp/CabIR nodes whose rig file records a TONE3000 origin
+(`asset.source = {provider: "tone3000", id: <model id>}` with a non-empty id): the ones `tone3000Fetch` can restore.
+It is computed whenever a rig is installed (load, new, structural edit) and is `[]` when nothing qualifies, whether or
+not TONE3000 is configured or connected.
 
 **PluginRef**: `{format, uid, name, vendor}`.
+
+**UserRef** (TONE3000 user): `{username, displayName, avatarUrl, url}` (strings, `""` when unknown).
+
+**Tone3000Status** (`tone3000Status`, `getState.tone3000`, the `tone3000Status` event): `{configured, connected, busy,
+remembered, user: UserRef | null}`. `configured` is false when the build/settings have no client id (then nothing else
+TONE3000 exists: every other `tone3000*` command replies `ok:false "not configured"`); `connected` is true while tokens
+are stored (a launch with tokens in the Keychain starts connected); `busy` is true while a sign-in or picker window
+is open; `remembered` is false when the platform secure store refused the tokens, which then live in memory for this
+session only ("sign-in will not be remembered"); `user` is null when signed out or while the profile is still being
+fetched (a `tone3000Status` event follows when it arrives). Without a client id the status is
+`{configured: false, connected: false, busy: false, remembered: true, user: null}`.
+
+**ToneSummary**: `{id, title, gear, format, license, creator: UserRef, image, url, modelsCount, downloadsCount,
+favoritesCount}`. `format` is TONE3000's own value (`"nam"` or `"ir"`), `image` the URL of the first tone image (or
+`""`), `url` the tone's page on tone3000.com, the counts are numbers (0 when absent). Nothing of it is written to disk.
+
+**Tone**: a ToneSummary plus `{description, makes: [name], tags: [name], images: [url], publishedAt, models: [{id, name,
+size, architecture}]}`. `models` lists the NAM A2 models first, then the A1 ones (`architecture` is `"2"` or `"1"`;
+`custom` models are left out); an IR tone lists its models as TONE3000 returns them, with an empty `architecture`.
+
+**DownloadJob** (`tone3000Download` events): `{jobId, modelId, toneId, nodeId?, state: "queued"|"downloading"|"verifying"
+|"done"|"failed", progress: 0..1, file?, sha256?, updated?, error?}`. `toneId` is the request's, else the tone found
+for the model (`""` before that). `nodeId` is echoed when the request had one. `done` carries `file` (the absolute path
+in the library, `Models/TONE3000/...` or `IRs/TONE3000/...`) and `sha256`, and `updated` (bool) only when the request
+had an `expectedSha` (a rig fetch): true when the downloaded file's hash differs from the one the rig recorded. `failed`
+carries `error`. Possible errors: `"canceled"`; `"gone"` (the model or tone is 404/403 on TONE3000); `"not a valid nam
+file"` / `"not a valid ir file"` (content check failed, nothing entered the library); `"HTTP <status>"`; `"rate
+limited"`; the transport's message for network failures; the OS message (`"Cannot create <path>"`, `"Cannot write
+<path>"`) when the library is not writable.
+
 
 **PluginInfo** (`listPlugins` / `rescanPlugins`): a PluginRef plus what the scan reported, for sorting the plugin
 picker: `{format, uid, name, vendor, category, isInstrument, numInputChannels, numOutputChannels}`. `category` is
@@ -86,14 +123,20 @@ JUCE's `PluginDescription::category` verbatim (VST3: e.g. `"Fx|Distortion"`, `"I
 typically has 0 inputs; a sidechain bus adds inputs). A PluginInfo is accepted wherever a PluginRef is (the extra
 fields are ignored), and only the PluginRef fields are written to rig files.
 
-**Asset**: `{file: absolute path, name: file name without extension, kind: "nam"|"ir", sha256}`.
+**Asset**: `{file: absolute path, name: file name without extension, kind: "nam"|"ir", sha256, source?}`. `source` is
+present (in `listAssets`) only when the file's sha256 is in TONE3000's provenance index, i.e. it was downloaded through
+the app, and the build has a client id: `{provider: "tone3000", id: <model id>, toneId, title, creator: UserRef,
+license, url: <tone page on tone3000.com>, image: <absolute path of the cached tone image, or "">}`. The library
+(`listAssets`) uses it for attribution rows and the licence line; the files themselves are ordinary library files.
 
 **Settings**: `{audioDeviceType, audioDeviceName, inputChannel, outputFirstChannel, sampleRate, bufferSize,
 watchedFolders: [path], globalMappings: [{control, action, node}], footswitchKeys: {"0x04": "footswitch:L", ...},
-footswitchDevice: {vid, pid} | null, tone3000AutoFetch: bool, tone3000ClientId: string}` (`tone3000AutoFetch`: download
-a missing TONE3000 model when a rig needing it loads, only while connected; `tone3000ClientId`: TONE3000 publishable key,
-trimmed, overrides the compiled-in `AMP_TONE3000_CLIENT_ID`, empty = use the compiled-in one; `footswitchDevice`: a keyboard the user picked as the footswitch; it is opened in
-addition to the automatically recognised models — no other keyboard is ever grabbed. `setSettings` takes `{vid, pid}`
+footswitchDevice: {vid, pid} | null, tone3000AutoFetch: bool, tone3000ClientId: string}` (`tone3000AutoFetch`, default
+`false`: download the missing TONE3000 models of a rig right after it is loaded or created — not after structural
+edits — but only while TONE3000 is configured and connected; it never opens a window. `tone3000ClientId`: a TONE3000
+publishable key, trimmed; overrides the compiled-in `AMP_TONE3000_CLIENT_ID` (empty = use the compiled-in one). The
+client id is read once at launch: changing it takes effect after a restart. `footswitchDevice`: a keyboard the user
+picked as the footswitch; it is opened in addition to the automatically recognised models — no other keyboard is ever grabbed. `setSettings` takes `{vid, pid}`
 (16-bit ids) or `null` to clear.)
 (+ in `getSettings`/`setSettings` results: `availableDevices: [name]`, `availableSampleRates: [hz]`,
 `availableBufferSizes: [n]`, `availableInputChannels: [name]`, `availableOutputChannels: [name]` of the open device /
@@ -107,7 +150,7 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 
 | Command | Args | Result | Notes / events |
 |---|---|---|---|
-| `getState` | — | `{protocol: 1, rig, report, dirty, startupErrors: [{message, context, rigId?}], saved, learning, settings, deviceStatus, controlStatus, tunerOn, favorites: [id], recents: [id], bands: [name]}` | Call on UI start-up. `startupErrors` lists problems found while starting (`context` `loadRig` with the `rigId` of a last rig that could not be loaded — offer `restoreBackup`; `audioDevice`; `audioPermission` when microphone access was denied — the app opens the device only after asking, so this entry may appear after the first `getState`; `pluginBlacklisted` with `pluginId`: "<plugin> crashed last time and was disabled" — offer Retry → `unblacklistPlugin`). |
+| `getState` | — | `{protocol: 1, rig, report, dirty, startupErrors: [{message, context, rigId?}], saved, learning, settings, deviceStatus, controlStatus, tunerOn, favorites: [id], recents: [id], bands: [name], tone3000: Tone3000Status}` | Call on UI start-up. `startupErrors` lists problems found while starting (`context` `loadRig` with the `rigId` of a last rig that could not be loaded — offer `restoreBackup`; `audioDevice`; `audioPermission` when microphone access was denied — the app opens the device only after asking, so this entry may appear after the first `getState`; `pluginBlacklisted` with `pluginId`: "<plugin> crashed last time and was disabled" — offer Retry → `unblacklistPlugin`). |
 | `listRigs` | — | `{rigs: [{id, name, band, tags: [tag], favorite}], bands: [name]}` | Sorted by band, then name. `tags` as stored in each file. Corrupt files and hidden files/folders (`.DS_Store`, ...) are not listed. Two files with the same `id` (e.g. a Finder copy): the file the engine already knew keeps the id (else the oldest file, then the shorter name) and the other is rewritten (atomically) with a fresh id, so both list and open independently. |
 | `loadRig` | `id` | `{id}` | `rigLoaded`, `rigDirty{false}` if it was dirty. Corrupt / unreadable rig → `ok:false` with the parse error (file untouched; offer `restoreBackup`). Unsaved changes of the current rig are discarded (UI confirms using `dirty`). |
 | `newRig` | `name?` (default `"New Rig"`), `band?` (default `"My Tones"`) | `{id}` | Default chain In → Gate → NamAmp → CabIR → Out; **unsaved** until `saveRig` (`saved:false`). `rigLoaded`. |
@@ -141,6 +184,15 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `restoreBackup` | `id` | `{id}` | Copies the newest `.bak` over the rig file (the current file is first kept as `<file>.corrupt` if unreadable, else `<file>.replaced`), then loads it. Works for rigs corrupted before this launch (found through their backups) → `rigLoaded`. No backup → `ok:false`. |
 | `confirmQuit` | `action` (`"save"`\|`"discard"`\|`"cancel"`) | `{}` | The answer to `quitRequested`. `save` saves the rig (as `saveRig` with no args) and quits; a failed save replies `ok:false` and does not quit. `discard` quits without saving; `cancel` keeps running. Other values → `ok:false`. |
 | `setNodeArt` | `id`, `archetype?`, `imageFile?` | `{id, art: {archetype, image, snapshot}}` | `archetype` is stored in the rig (`rigDirty{true}`). `imageFile` (absolute path) is copied into `Art/` under a generated ASCII name (`<rigId>-<nodeId>-<hash>.<ext>`, characters `[A-Za-z0-9._-]` only, so its `art/` URL needs no encoding on any platform) and recorded in `Art/user-art.json` under `"<rigId>/<nodeId>"` — never in the rig; `""` removes the assignment. |
+| `tone3000Status` | — | Tone3000Status | Never fails (an unconfigured build answers `configured: false`). Also part of `getState` as `tone3000`; changes arrive as `tone3000Status` events. |
+| `tone3000Connect` | — | `{connected: true, user: UserRef \| null}` or `{canceled: true}` | **Replies later**, when the sign-in window has finished (UI timeout 600000 ms). Asks the app to open its sign-in window (the engine never opens windows itself): TONE3000's email + one-time-code page in an in-app web view, closed by the app when the OAuth redirect (`http://127.0.0.1/callback`) is reached. `{canceled: true}` when the user closes the window (no error event) or `tone3000Disconnect` runs meanwhile. `user` is null if the profile fetch failed after a successful sign-in. Errors: `"not configured"`; `"busy"` (a sign-in or picker window is already open); `"not available"` (the host app has no window hook, or opening it threw); `"sign-in response didn't match the request"` (state mismatch; also an `error` event, context `tone3000`); `"sign-in did not return an authorization code"`; otherwise the server's/transport's sign-in error text (e.g. `"token exchange failed (HTTP 400)"`, `"could not store tokens"`). `tone3000Status` events when `busy` or `connected` change. |
+| `tone3000Disconnect` | — | `{}` | Immediately: a sign-in/picker window flow still open replies `{canceled: true}` and whatever the window or token exchange reports later changes nothing (a sign-in that completes after this is undone); every download job ends `failed "canceled"`; the tokens are removed from the secure store, the user forgotten, and the app wipes the web view's TONE3000 cookies (so the next sign-in asks for the email again). `tone3000Status`. `ok:false "not configured"`. |
+| `tone3000Browse` | `format?` (`"nam"`\|`"ir"`, filters the picker), `nodeId?` (echoed back), `loadTone?` (a tone id: open that tone in TONE3000's page instead of the picker) | `{toneId, nodeId?}` or `{canceled: true}` | **Replies later**, when the user has picked a tone or closed the window (UI timeout 600000 ms). Opens TONE3000's own tone picker (`prompt=select_tone`, previews on, NAM architecture 2; `prompt=load_tone&tone_id=<loadTone>` with `loadTone`) in the in-app window. Not connected: the sign-in window runs first, then the picker window opens (a second window request replaces an open one). The result only names the tone; nothing is downloaded: follow with `tone3000Tone` and `tone3000Download`. Invalid `format` → `ok:false` `argument "format" must be "nam" or "ir"`. Other errors as `tone3000Connect`. |
+| `tone3000List` | `list` (`"favorited"`\|`"downloaded"`\|`"created"`\|`"trending"`\|`"latest"`), `page?` (>= 1, default 1) | `{tones: [ToneSummary], page, totalPages}` | **Replies later** (a network call; UI timeout 30000 ms). `favorited`, `downloaded`, `created` are paged 25 per page; `trending` and `latest` are one page: they always reply `page: 1, totalPages: 1` whatever `page` says. Lists are never cached or written to disk. Errors: `"not configured"`; `"not connected"` (signed out; if the tokens vanished since the last status, a `tone3000Status{connected:false}` follows); `"TONE3000 rate limit; try again in <n> s"` (or `"... try again later"` without a `Retry-After`: a 429 is never retried automatically); `"Can't reach TONE3000: <reason>"` (network); `"not found on TONE3000"`; `"forbidden"`; `"HTTP <status>"`; `"unparsable response"`. Unknown list → `ok:false` `unknown list: <x> (expected favorited, downloaded, created, trending or latest)`; `page` < 1 → `argument "page" must be 1 or more`. |
+| `tone3000Tone` | `id` | Tone | **Replies later** (UI timeout 30000 ms): the tone and its models in one reply (nothing cached). Same errors as `tone3000List`. |
+| `tone3000Download` | `modelId`, `toneId?`, `nodeId?`, `addNode?: {type: "NamAmp"\|"CabIR", index}` | `{jobId}` | Replies at once; the job's progress arrives as `tone3000Download` events (DownloadJob: `queued`, `downloading` at most 4 per second, `verifying`, then `done` or `failed`). Downloads the model, checks the file's content, then moves it to `Models/TONE3000/<creator>/<tone title> — <model name>.nam` or `IRs/TONE3000/<creator>/<tone title> — <model name>.wav` (every component through `RigStore::sanitizeFileName`; a clash with a different file appends ` (2)`, ` (3)`, ...), records its provenance and caches the tone image in `Art/tone3000/`. A model whose file is already in the library (found by hash through the provenance index) does not touch the network: `queued`, then `done`. With `nodeId` (a NamAmp/CabIR node) or `addNode` (the semantics of `addNode`; `nodeId` wins when both are given) the finished file becomes that node's asset in the rig that was loaded when the command ran (`setAsset` / `addNode` effects: `rigLoaded`, `rigDirty{true}`); a rig switched meanwhile leaves the file in the library only. If the file cannot be used there (e.g. an IR for a NAM node: `that tone is a ir file and cannot be used on a NamAmp node`) the job still ends `done` and an `error` event (context `tone3000`) carries the message. Errors: `"not configured"`; `"not connected"`; `unknown node: <id>`; `node <id> takes no asset`; `argument "addNode" must be an object {type, index}`; `addNode type must be "NamAmp" or "CabIR"`. |
+| `tone3000Fetch` | `nodeIds?` (default: every node in `report.fetchable` of the current rig) | `{jobs: [jobId]}` | Restores a rig's missing TONE3000 files: one job per node (duplicates dropped), started from the model id stored in the rig; each finished file is assigned to its node (`rigLoaded`, `rigDirty{true}`) and its `done` event carries `updated` (the rig's recorded hash is compared with the downloaded file's). A model removed from TONE3000 fails its job with `error: "gone"` and the node stays a placeholder. Replies at once. Errors: `"not configured"`; `"not connected"` (no window is ever opened for a fetch); `"no rig loaded"`; `node <id> has no TONE3000 file to fetch` (not in `fetchable`; nothing is started then). With `tone3000AutoFetch` on, the engine does the same by itself after a rig load while connected. |
+| `tone3000Cancel` | `jobId` | `{}` | Cancels a running job: its partial file is deleted and a `tone3000Download{state: "failed", error: "canceled"}` event follows. An unknown or finished job is a no-op. `ok:false "not configured"`. |
 
 ## Events
 
@@ -162,4 +214,6 @@ current type; empty without audio. `inputChannel` / `outputFirstChannel` index t
 | `learnCancelled` | `{}` | An armed learn was dropped because its node went away (e.g. `removeNode`); hide the "press a footswitch" overlay. |
 | `mappingCleared` | `{control}` | After `clearMapping`. |
 | `quitRequested` | `{rigName}` | The app is quitting (Cmd-Q / window close) and the rig has unsaved changes. Show Save / Discard / Cancel and answer with `confirmQuit`. If no answer arrives within ~5 s the app asks with a native dialog instead. A clean rig quits without this event. |
-| `error` | `{message, context}` | Asynchronous problems (`context`: `audioDevice`, `audioPermission` (microphone access denied; also listed in `startupErrors`), `pluginBlacklisted` (+ `pluginId`; also in `startupErrors`), `deviceRestart`, `swapPlan`, `settings`). Command failures are replies, not events. Errors raised before the UI set `send` (startup) are queued and delivered ahead of the first reply/event. |
+| `tone3000Status` | Tone3000Status | The status changed: a sign-in or picker window opened or closed (`busy`), signed in or out, the user's profile arrived, the tokens were refused for good (token refresh failed: `connected:false`; the next action starts the sign-in again) or the tokens vanished. Also after `tone3000Disconnect`. |
+| `tone3000Download` | DownloadJob | A job changed state: queued, progress, verifying, done, failed. Every job ends with exactly one `done` or `failed`. |
+| `error` | `{message, context}` | Asynchronous problems (`context`: `audioDevice`, `audioPermission` (microphone access denied; also listed in `startupErrors`), `pluginBlacklisted` (+ `pluginId`; also in `startupErrors`), `deviceRestart`, `swapPlan`, `settings`, `tone3000`: a sign-in response that did not match the request, or a downloaded file that could not be put on the rig's node; the message is the same text as the failing command's). Command failures are replies, not events. Errors raised before the UI set `send` (startup) are queued and delivered ahead of the first reply/event. |

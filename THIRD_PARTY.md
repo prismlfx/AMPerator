@@ -7,6 +7,7 @@
 | [NeuralAmpModelerCore](https://github.com/sdatkinson/NeuralAmpModelerCore) commit 0b3d3c97b0859a3a8c92a8628c4dd89a25eb5842 | MIT | NAM amp model inference |
 | [nlohmann/json](https://github.com/nlohmann/json) 3.12.0 (vendored in NeuralAmpModelerCore) | MIT | NAM model file parsing |
 | [hidapi](https://github.com/libusb/hidapi) hidapi-0.15.0 | BSD-3-Clause (one of its three offered licenses) | USB footswitch input |
+| [TONE3000 API](https://www.tone3000.com/api/terms) | TONE3000 API Terms (free tier, non-commercial open-source use) | Browsing, sign-in and downloading amp models and IRs; downloaded models stay the property of their creators under the license shown with each tone |
 | [Eigen](https://eigen.tuxfamily.org) 5.0.1, commit bc3b39870ecb690a623a3f49149a358b95c5781d (NeuralAmpModelerCore submodule) | MPL-2.0 (some files BSD/other MPL2-compatible) | Linear algebra |
 
 ## Test fixtures
