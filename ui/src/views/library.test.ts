@@ -284,3 +284,41 @@ describe('library shortcuts', () => {
     expect(bandGroups()).toHaveLength(3);
   });
 });
+
+describe('Models / IRs attribution and the TONE3000 tab', () => {
+  const tabButton = (label: string) => [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === label)!;
+  const source = {
+    provider: 'tone3000', id: '7', toneId: '3', title: 'Plexi', license: 'cc-by-nc',
+    creator: { username: 'ada', displayName: 'Ada', avatarUrl: '', url: '' }, url: '', image: '',
+  };
+
+  it('shows creator and license under a TONE3000 model, and nothing under a plain file', async () => {
+    await rendered();
+    tabButton('Models').click();
+    juce.reply(pending('listAssets').id, true, {
+      assets: [
+        { name: 'Plexi', file: '/m/TONE3000/ada/Plexi.nam', source },
+        { name: 'Mine', file: '/m/Mine.nam' },
+      ],
+    });
+    await flush();
+    const rows = [...root.querySelectorAll('.library-list li')];
+    expect(rows[0].querySelector('.attribution')!.textContent).toBe('ada · CC BY-NC — credit the creator, non-commercial');
+    expect(rows[1].querySelector('.attribution')).toBeNull();
+  });
+
+  it('the TONE3000 tab is a logo button that renders the tab and cleans it up when another tab is shown', async () => {
+    await rendered();
+    const brand = root.querySelector<HTMLButtonElement>('[role="tab"][aria-label="TONE3000"]')!;
+    expect(brand.querySelector('img')!.alt).toBe('TONE3000');
+    juce.fromBackend('amp', { v: 1, event: 'tone3000Status', data: { configured: true, connected: false, busy: false, remembered: false, user: null } });
+    brand.click();
+    expect(root.querySelector('.tone-splash')).not.toBeNull(); // not connected: the splash
+    tabButton('Models').click();
+    expect(root.querySelector('.tone-splash')).toBeNull();
+    // the tab's store subscription is gone: a later status change does not redraw it
+    juce.fromBackend('amp', { v: 1, event: 'tone3000Status', data: { configured: true, connected: true, busy: false, remembered: false, user: null } });
+    expect(root.querySelector('.tone-account')).toBeNull();
+    expect(juce.commands().filter((c) => c.cmd === 'tone3000List')).toHaveLength(0);
+  });
+});

@@ -420,7 +420,7 @@ describe('library', () => {
     expect(lastCommand()).toMatchObject({ cmd: 'restoreBackup', args: { id: 'bad' } });
   });
 
-  it('stars toggle favorites and the online tab is disabled', async () => {
+  it('stars toggle favorites and the TONE3000 tab is enabled', async () => {
     await started();
     library.renderLibrary(root);
     juce.reply(juce.commands().find((c) => c.cmd === 'listRigs')!.id, true, {
@@ -430,9 +430,9 @@ describe('library', () => {
     await flush();
     root.querySelector<HTMLButtonElement>('.band-group .star')!.click();
     expect(lastCommand()).toMatchObject({ cmd: 'toggleFavorite', args: { id: 'a' } });
-    const online = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent!.includes('Search online'))!;
-    expect(online.disabled).toBe(true);
-    expect(online.textContent).toContain('coming soon');
+    const online = root.querySelector<HTMLButtonElement>('[role="tab"][aria-label="TONE3000"]')!;
+    expect(online.disabled).toBe(false);
+    expect(online.querySelector('img')!.alt).toBe('TONE3000');
   });
 
   it('deleting a rig asks first, then calls deleteRig', async () => {

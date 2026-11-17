@@ -201,12 +201,13 @@ describe('rigSaved', () => {
 
 describe('load report', () => {
   it('summarises missing assets and plugins and files matched by name', async () => {
-    expect(state.reportSummary({ missingAssets: [], missingPlugins: [], placeholderNodeIds: [], resolvedByFilename: [] })).toBeNull();
+    expect(state.reportSummary({ missingAssets: [], missingPlugins: [], placeholderNodeIds: [], resolvedByFilename: [], fetchable: [] })).toBeNull();
     const text = state.reportSummary({
       missingAssets: ['Plexi.nam'],
       missingPlugins: ['Space Echo'],
       placeholderNodeIds: ['a', 'b'],
       resolvedByFilename: ['/x/4x12.wav'],
+      fetchable: [],
     })!;
     expect(text).toContain('Missing: Plexi.nam, Space Echo');
     expect(text).toContain('4x12.wav');

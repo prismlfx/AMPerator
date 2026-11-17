@@ -1009,10 +1009,159 @@ select:disabled {
   cursor: default;
   opacity: 0.6;
 }
-.library-tab .soon {
-  margin-left: 4px;
+.library-tab-brand {
+  display: inline-flex;
+  align-items: center;
+}
+.tab-logo {
+  display: block;
+  height: 12px;
+  width: auto;
+}
+.library-list .attribution {
+  font-size: 12px;
+}
+
+/* ---- TONE3000 tab ---- */
+.tone-splash {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 8px;
+}
+.tone-logo {
+  height: 24px;
+  width: auto;
+}
+.tone-splash p {
+  margin: 0;
+  line-height: 1.4;
+}
+.tone-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.tone-user {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+.tone-browse {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.tone-formats {
+  display: flex;
+  gap: 4px;
+}
+.tone-lists {
+  padding: 0 0 8px;
+  margin: 0 0 8px;
+}
+.tone-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+.tone-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tone-image {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--bg-input);
+}
+.tone-main {
+  flex: 1;
+  min-width: 0;
+}
+.tone-open {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.tone-open:hover .tone-title {
+  text-decoration: underline;
+}
+.tone-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tone-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+.tone-gear,
+.tone-creator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.format-badge {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   font-size: 10px;
-  text-transform: uppercase;
+  font-weight: 700;
+  line-height: 16px;
+}
+.tone-mark {
+  height: 12px;
+  width: auto;
+  flex: none;
+}
+.tone-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.tone-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.tone-discover {
+  width: 100%;
 }
 .library-content {
   flex: 1;

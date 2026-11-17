@@ -15,3 +15,7 @@
 |---|---|---|
 | `tests/fixtures/assets/tiny.nam` | NeuralAmpModelerCore `example_models/lstm.nam` (at the commit above), unmodified | MIT |
 | `tests/fixtures/di/di_48k.wav` | Synthesized for this project (Karplus-Strong strummed chords) | AGPLv3 (project) |
+
+## Trademarks
+
+TONE3000 logo and T3K mark — trademarks of TONE3000, used under its brand guidelines (tone3000.com/api, Design Requirements); not covered by this project's AGPL license. The files committed in `ui/src/brand/tone3000/` are plain-text placeholders and must be replaced with the official assets from TONE3000's logo pack before a public release.

@@ -3,6 +3,7 @@
 
 import { call, on } from './bridge';
 import { confirmDialog } from './dialog';
+import { NO_TONE3000, startJobEvents, type Tone3000Status } from './online/tone3000';
 
 export type View = 'stage' | 'edit';
 
@@ -35,6 +36,7 @@ export interface LoadReport {
   missingPlugins: string[];
   placeholderNodeIds: string[];
   resolvedByFilename: string[];
+  fetchable: string[]; // nodes whose missing file can be downloaded from TONE3000
 }
 
 export interface DeviceStatus {
@@ -69,6 +71,8 @@ export interface Settings {
   globalMappings: { control: string; action: string; node: string }[];
   footswitchKeys: Record<string, string>;
   footswitchDevice?: { vid: number; pid: number } | null; // a keyboard picked as the footswitch
+  tone3000AutoFetch?: boolean; // download a rig's missing TONE3000 files on load (when connected)
+  tone3000ClientId?: string; // empty = the build's own
   // getSettings / setSettings only:
   availableDevices?: string[];
   availableSampleRates?: number[];
@@ -96,13 +100,14 @@ export interface AppState {
   favorites: string[];
   recents: string[];
   bands: string[];
+  tone3000: Tone3000Status;
 }
 
 const initialState: AppState = {
   connected: false,
   view: 'stage', // the app opens into stage mode
   rig: null,
-  report: { missingAssets: [], missingPlugins: [], placeholderNodeIds: [], resolvedByFilename: [] },
+  report: { missingAssets: [], missingPlugins: [], placeholderNodeIds: [], resolvedByFilename: [], fetchable: [] },
   dirty: false,
   saved: false,
   learning: false,
@@ -117,6 +122,7 @@ const initialState: AppState = {
   favorites: [],
   recents: [],
   bands: [],
+  tone3000: NO_TONE3000,
 };
 
 let current: AppState = initialState;
@@ -225,6 +231,8 @@ export async function initStore(): Promise<void> {
       if (rig) update({ rig: { ...rig, mappings: (rig.mappings ?? []).filter((m) => m.control !== d.control) } });
     });
     on('controlStatus', (d) => update({ controlStatus: d }));
+    on('tone3000Status', (d) => d && update({ tone3000: { ...NO_TONE3000, ...d } }));
+    startJobEvents();
     on('learned', (d) => {
       // The control now toggles d.node in this rig, replacing whatever it mapped before.
       const rig = current.rig;
@@ -250,6 +258,7 @@ export async function initStore(): Promise<void> {
     favorites: s.favorites ?? [],
     recents: s.recents ?? [],
     bands: s.bands ?? [],
+    tone3000: { ...NO_TONE3000, ...(s.tone3000 ?? {}) },
   });
 }
 

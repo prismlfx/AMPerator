@@ -1,12 +1,13 @@
 // Library panel (slides out from the left in both views): a search field and a tag filter bar over bands → rigs,
-// favorites, recents, New rig, and read-only Models / IRs / Plugins lists. "Search online" is a placeholder tab
-// (sub-project 3). ⌘F (and / when no text field has the focus) opens the panel on the search field.
+// favorites, recents, New rig, and read-only Models / IRs / Plugins lists, and the TONE3000 tab (views/tone3000.ts). ⌘F (and / when no text field has the focus) opens the panel on the search field.
 
 import { call } from '../bridge';
 import { confirmDialog, el, toast } from '../dialog';
 import { isTyping } from '../keys';
 import { filterRigs } from '../rigFilter';
+import { licenseLabel, logoUrl } from '../online/tone3000';
 import { confirmDiscardIfDirty, setView, store, type AppState } from '../state';
+import { renderTone3000Tab } from './tone3000';
 
 interface RigEntry {
   id: string;
@@ -21,7 +22,13 @@ interface TagCount {
   count: number;
 }
 
-type Tab = 'rigs' | 'models' | 'irs' | 'plugins';
+type Tab = 'rigs' | 'models' | 'irs' | 'plugins' | 'tone3000';
+
+interface AssetRow {
+  name: string;
+  file: string;
+  source?: { creator?: { username?: string }; license?: string };
+}
 
 const MAX_RECENTS = 10; // Settings::maxRecent
 
@@ -90,6 +97,12 @@ function libraryKey(s: AppState): string {
   return JSON.stringify([rig?.id, rig?.name, rig?.band, rig?.tags ?? [], s.saved, s.saveCount]);
 }
 
+/** "creator · license" under a TONE3000 model's name, or "" for files that did not come from there. */
+function attribution(source: AssetRow['source']): string {
+  if (!source) return '';
+  return [source.creator?.username, source.license ? licenseLabel(source.license) : ''].filter(Boolean).join(' · ');
+}
+
 export function renderLibrary(root: HTMLElement): void {
   panel = root;
   root.classList.add('library');
@@ -103,6 +116,7 @@ export function renderLibrary(root: HTMLElement): void {
   let recents = [...store.get().recents];
   let lastKey = '';
   let lastSavedRig = store.get().saved ? (store.get().rig?.id ?? '') : ''; // id of the current rig once saved
+  let disposeTab: (() => void) | null = null; // the TONE3000 tab's subscriptions while it is shown
 
   const close = el('button', { class: 'icon-button', 'aria-label': 'Close library', title: 'Close' }, '×');
   close.addEventListener('click', () => toggleLibrary(false));
@@ -139,6 +153,7 @@ export function renderLibrary(root: HTMLElement): void {
   focusSearch = () => {
     toggleLibrary(true);
     if (tab !== 'rigs') {
+      leaveTab();
       tab = 'rigs';
       renderTabs();
       renderRigs();
@@ -148,34 +163,44 @@ export function renderLibrary(root: HTMLElement): void {
     search.select();
   };
 
+  function leaveTab() {
+    disposeTab?.();
+    disposeTab = null;
+  }
+
   function renderTabs() {
-    const def: [Tab | 'online', string][] = [
+    const def: [Tab, string][] = [
       ['rigs', 'Rigs'],
       ['models', 'Models'],
       ['irs', 'IRs'],
       ['plugins', 'Plugins'],
-      ['online', 'Search online'],
+      ['tone3000', 'TONE3000'],
     ];
     tabs.replaceChildren(
       ...def.map(([id, label]) => {
         const b = el('button', { class: 'library-tab', role: 'tab', 'aria-selected': String(id === tab) }, label);
-        if (id === 'online') {
-          b.disabled = true;
-          b.title = 'Search online — coming soon';
-          b.append(el('span', { class: 'soon' }, 'coming soon'));
-        } else {
-          b.addEventListener('click', () => {
-            tab = id;
-            renderTabs();
-            void showTab();
-          });
+        if (id === 'tone3000') {
+          b.setAttribute('aria-label', 'TONE3000');
+          b.classList.add('library-tab-brand');
+          b.replaceChildren(el('img', { class: 'tab-logo', src: logoUrl(), alt: 'TONE3000' }));
         }
+        b.addEventListener('click', () => {
+          tab = id;
+          renderTabs();
+          void showTab();
+        });
         return b;
       }),
     );
   }
 
   async function showTab() {
+    leaveTab();
+    if (tab === 'tone3000') {
+      content.replaceChildren();
+      disposeTab = renderTone3000Tab(content);
+      return;
+    }
     if (tab === 'rigs') {
       renderRigs(); // the last known list at once
       return refreshRigs();
@@ -183,13 +208,13 @@ export function renderLibrary(root: HTMLElement): void {
     content.replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
     const shown = tab;
     try {
-      let items: { name: string; detail: string }[];
+      let items: { name: string; detail: string; credit?: string }[];
       if (tab === 'plugins') {
         const r = await call<{ plugins: { name: string; vendor: string; format: string }[] }>('listPlugins');
         items = r.plugins.map((p) => ({ name: p.name, detail: `${p.vendor} · ${p.format}` }));
       } else {
-        const r = await call<{ assets: { name: string; file: string }[] }>('listAssets', { kind: tab === 'models' ? 'nam' : 'ir' });
-        items = r.assets.map((a) => ({ name: a.name, detail: a.file }));
+        const r = await call<{ assets: AssetRow[] }>('listAssets', { kind: tab === 'models' ? 'nam' : 'ir' });
+        items = r.assets.map((a) => ({ name: a.name, detail: a.file, credit: attribution(a.source) }));
       }
       if (tab !== shown) return;
       const empty = {
@@ -203,7 +228,15 @@ export function renderLibrary(root: HTMLElement): void {
           : el(
               'ul',
               { class: 'library-list' },
-              ...items.map((i) => el('li', { title: i.detail }, el('span', {}, i.name), el('span', { class: 'muted path' }, i.detail))),
+              ...items.map((i) =>
+                el(
+                  'li',
+                  { title: i.detail },
+                  el('span', {}, i.name),
+                  ...(i.credit ? [el('span', { class: 'muted attribution' }, i.credit)] : []),
+                  el('span', { class: 'muted path' }, i.detail),
+                ),
+              ),
             ),
       );
     } catch (e) {
