@@ -39,6 +39,8 @@ variable `AMP_UI_DEV=1` a Debug build of the app loads the Vite dev server at `h
 | engine → UI (event) | `{"v":1, "event":"<name>", "data":{...}}` |
 
 - Every command gets exactly one reply carrying the request's `id` (echoed verbatim; `null` if the message had none).
+- Some commands reply later: the reply still carries the request's id; the UI passes a longer timeout to `call()` for
+  them (noted per command). Events and replies to other commands may arrive in the meantime.
 - `v` other than `1` → `ok:false`, error `unsupported protocol version <v>; this engine speaks version 1`.
 - Unknown command → `ok:false`, error `unknown command: <cmd>`.
 - Missing / wrongly typed arguments → `ok:false` with a message naming the argument (e.g.

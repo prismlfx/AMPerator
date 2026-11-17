@@ -33,15 +33,18 @@ juce::String compiledTone3000ClientId();
 
 class Bridge;
 
-/** Outcome of one bridge command: `result` (an object, may be void) on success, `error` otherwise. */
+/** Outcome of one bridge command: `result` (an object, may be void) on success, `error` otherwise. `pending`: the
+    handler took a Bridge::deferReply() completion and replies through it later (see Bridge::deferReply). */
 struct CommandResult
 {
     bool ok = true;
     juce::var result;
     juce::String error;
+    bool pending = false;
 
-    static CommandResult success(juce::var r = {}) { return { true, std::move(r), {} }; }
-    static CommandResult failure(juce::String e) { return { false, {}, std::move(e) }; }
+    static CommandResult success(juce::var r = {}) { return { true, std::move(r), {}, false }; }
+    static CommandResult failure(juce::String e) { return { false, {}, std::move(e), false }; }
+    static CommandResult deferred() { return { true, {}, {}, true }; }
 };
 
 /** Fields of setSettings; absent fields are left unchanged. */

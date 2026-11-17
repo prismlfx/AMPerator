@@ -3,6 +3,7 @@
 #include <cmath>
 #include <map>
 #include <stdexcept>
+#include <utility>
 
 #include "Engine.h"
 #include "model/ChainGraph.h"
@@ -258,9 +259,54 @@ const std::map<juce::String, Handler>& commands()
 
 Bridge::Bridge(Engine& e) : engine(e) {}
 
+Bridge::~Bridge() { *alive = false; }
+
+Bridge::Completion Bridge::deferReply()
+{
+    jassert(current.has_value()); // only a running handler may defer its reply
+    if (! current)
+        return [](CommandResult) {};
+    if (current->replied == nullptr)
+        current->replied = std::make_shared<bool>(false);
+    return [this, aliveFlag = alive, id = current->id, replied = current->replied](CommandResult r)
+    {
+        JUCE_ASSERT_MESSAGE_THREAD
+        if (*replied || ! *aliveFlag)
+            return;
+        *replied = true;
+        if (r.pending) // a completion cannot defer again
+            r = CommandResult::failure("internal error: deferred reply completed with a pending result");
+        replyWith(id, r);
+    };
+}
+
+void Bridge::replyWith(const juce::var& id, const CommandResult& r)
+{
+    if (r.ok)
+        reply(id, true, r.result.isVoid() ? json::object() : r.result);
+    else
+        reply(id, false, r.error);
+}
+
 void Bridge::handle(const juce::var& message)
 {
     const juce::var id = isJsonObject(message) ? message["id"] : juce::var();
+
+    // While the handler runs, deferReply() binds to this message; restored afterwards (a handler may re-enter handle).
+    auto outer = std::exchange(current, Handling { id, nullptr });
+    struct Restore
+    {
+        Bridge& b;
+        std::optional<Handling>& outer;
+        ~Restore()
+        {
+            // A completion handed out by a handler that then replied (or threw) is spent: handle() replied.
+            if (b.current && b.current->replied)
+                *b.current->replied = true;
+            b.current = std::move(outer);
+        }
+    } restore { *this, outer };
+
     try
     {
         if (! isJsonObject(message))
@@ -287,10 +333,16 @@ void Bridge::handle(const juce::var& message)
             return reply(id, false, "unknown command: " + cmd);
 
         const auto r = it->second(engine, args);
-        if (r.ok)
-            reply(id, true, r.result.isVoid() ? json::object() : r.result);
-        else
-            reply(id, false, r.error);
+        if (r.pending)
+        {
+            if (current->replied == nullptr)
+                return reply(id, false, "internal error: deferred without a completion");
+            current->replied = nullptr; // the completion replies; keep it live past this handle()
+            return;
+        }
+        if (current->replied != nullptr && *current->replied)
+            return; // the handler already replied through a completion
+        replyWith(id, r);
     }
     catch (const ArgError& e)
     {

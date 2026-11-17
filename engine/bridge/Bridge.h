@@ -3,6 +3,7 @@
 #include <juce_core/juce_core.h>
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -14,6 +15,7 @@
 namespace amp
 {
 class Engine;
+struct CommandResult;
 
 /** Versioned JSON command/event bridge between the web UI and the Engine (see docs/bridge-protocol.md).
     Message thread only.
@@ -27,6 +29,7 @@ public:
     static constexpr int protocolVersion = 1;
 
     explicit Bridge(Engine&);
+    ~Bridge();
 
     void handle(const juce::var& message);
     std::function<void(const juce::var&)> send; // replies + events
@@ -35,11 +38,29 @@ public:
         queued and delivered (in order) ahead of the next reply or event once `send` is set. */
     void emit(const juce::String& name, const juce::var& data);
 
+    /** Replies to one command later. */
+    using Completion = std::function<void(CommandResult)>;
+    /** For a long-running command: called by its handler (only while handle() runs it), which then returns
+        CommandResult::deferred(). The completion, invoked later on the message thread, sends the reply carrying the
+        command's id. Only its first call replies; it does nothing once the Bridge is gone, nor when the handler
+        returned something other than deferred() (handle() replied then). */
+    Completion deferReply();
+
 private:
     void reply(const juce::var& id, bool ok, const juce::var& payload);
+    void replyWith(const juce::var& id, const CommandResult&);
     void flushPending();
 
     std::vector<juce::var> pending; // error events emitted before `send` was set
+
+    // The command handle() is running: its id and the "already replied" flag of a completion it handed out.
+    struct Handling
+    {
+        juce::var id;
+        std::shared_ptr<bool> replied;
+    };
+    std::optional<Handling> current;
+    std::shared_ptr<bool> alive = std::make_shared<bool>(true); // false once destroyed (completions check it)
 
     Engine& engine;
 };
