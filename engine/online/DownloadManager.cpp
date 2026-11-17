@@ -90,7 +90,7 @@ public:
     }
 
 private:
-    bool canceled() const { return cancelled->load(); }
+    bool canceled() const { return cancelled->load() || shouldExit(); }
 
     void post(JobEvent e)
     {
@@ -130,10 +130,16 @@ private:
 
         const auto& url = tone.images[0];
         const auto target = dir.getChildFile(stem + "." + imageExtension(url));
-        const auto temp = dir.getChildFile(stem + ".part");
+        // Unique per job: two models of one tone run concurrently and must not share a temp file.
+        const auto temp = dir.getChildFile(stem + "." + sanitizeId(request.jobId) + ".part");
         dir.createDirectory();
         temp.deleteFile();
         const auto error = owner.client.fetch(url, temp, nullptr, [this] { return canceled(); });
+        if (! error && ! canceled() && target.existsAsFile()) // another job finished first: keep its complete file
+        {
+            temp.deleteFile();
+            return target;
+        }
         if (error || canceled() || ! temp.existsAsFile() || temp.getSize() == 0 || ! temp.moveFileTo(target))
         {
             temp.deleteFile();
@@ -150,13 +156,13 @@ private:
 
         auto model = owner.client.model(request.modelId);
         if (model.error || ! model.value)
-            return fail(partial, errorText(model.error));
+            return fail(partial, model.error ? errorText(model.error) : juce::String("invalid response"));
         if (canceled())
             return fail(partial, "canceled");
 
         auto tone = owner.client.tone(model.value->toneId);
         if (tone.error || ! tone.value)
-            return fail(partial, errorText(tone.error));
+            return fail(partial, tone.error ? errorText(tone.error) : juce::String("invalid response"));
         if (canceled())
             return fail(partial, "canceled");
 
@@ -250,7 +256,7 @@ DownloadManager::~DownloadManager()
 
 juce::String DownloadManager::start(DownloadRequest request)
 {
-    if (request.jobId.isEmpty())
+    if (request.jobId.isEmpty() || active.count(request.jobId) > 0) // never share an id with a live job
         request.jobId = juce::Uuid().toString();
 
     auto flag = std::make_shared<std::atomic<bool>>(false);
@@ -282,6 +288,8 @@ void DownloadManager::cancel(const juce::String& jobId)
         it->second->store(true);
 }
 
+// May block for the HTTP timeout of an in-flight metadata request (only fetches poll the cancel flag). A Done event
+// dropped at destruction leaves its partial file behind; cleanPartials() removes it at the next start.
 void DownloadManager::cancelAll()
 {
     for (auto& entry : active)
@@ -300,9 +308,24 @@ void DownloadManager::cleanPartials(const juce::File& dir)
 
 void DownloadManager::deliver(const JobEvent& e)
 {
+    JobEvent out = e;
     if (e.state == JobState::Done || e.state == JobState::Failed)
+    {
+        // A cancel() that arrived after the worker's last check but before this delivery still wins: the job is
+        // still active from the caller's side.
+        auto it = active.find(e.jobId);
+        if (e.state == JobState::Done && it != active.end() && it->second->load())
+        {
+            e.file.deleteFile();
+            out = JobEvent();
+            out.jobId = e.jobId;
+            out.request = e.request;
+            out.state = JobState::Failed;
+            out.error = "canceled";
+        }
         active.erase(e.jobId);
+    }
     if (onEvent)
-        onEvent(e);
+        onEvent(out);
 }
 } // namespace amp::online

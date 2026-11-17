@@ -290,8 +290,10 @@ TEST_CASE("online_download: progress events are throttled and carry received ove
         return FakeHttp::file(200, assetBytes("tiny.nam"));
     });
     f.serveMetadata();
+    const auto startedAt = juce::Time::getMillisecondCounter();
     f.manager->start(DownloadRequest { {}, "m_123", {}, {}, {}, {} });
     REQUIRE(f.pumpUntil([&] { return f.finished(); }));
+    const auto elapsed = juce::Time::getMillisecondCounter() - startedAt;
     REQUIRE(f.events.back().state == JobState::Done);
 
     int progressEvents = 0;
@@ -305,7 +307,37 @@ TEST_CASE("online_download: progress events are throttled and carry received ove
             last = e.progress;
         }
     REQUIRE(progressEvents >= 1);
-    REQUIRE(progressEvents <= 6); // ~1 s of progress at one event per 250 ms
+    REQUIRE(progressEvents <= 1 + (int) (elapsed / 200)); // spacing of at least ~250 ms, with slack
+}
+
+TEST_CASE("online_download: concurrent jobs for one tone leave one complete image and no temp files")
+{
+    DownloadFixture f;
+    f.http.on("GET", imageUrl, [](const HttpRequest&) {
+        juce::Thread::sleep(150);
+        return FakeHttp::file(200, juce::MemoryBlock("IMAGE-COMPLETE-BYTES", 20));
+    });
+    f.serveMetadata(); // after the slow image route: the first registered match wins
+    f.manager->start(DownloadRequest { "a", "m_123", {}, {}, {}, {} });
+    f.manager->start(DownloadRequest { "b", "m_123", {}, {}, {}, {} });
+    REQUIRE(f.pumpUntil([&] { return f.count(JobState::Done) == 2; }));
+    for (const auto& e : f.events)
+        if (e.state == JobState::Done)
+            REQUIRE(e.image.existsAsFile());
+    const auto dir = f.artDir.getChildFile("tone3000");
+    REQUIRE(dir.getNumberOfChildFiles(juce::File::findFiles) == 1);
+    REQUIRE(dir.getChildFile("t_456.jpg").loadFileAsString() == "IMAGE-COMPLETE-BYTES");
+}
+
+TEST_CASE("online_download: a duplicate live jobId gets a fresh id")
+{
+    DownloadFixture f;
+    f.serveMetadata();
+    const auto first = f.manager->start(DownloadRequest { "dup", "m_123", {}, {}, {}, {} });
+    const auto second = f.manager->start(DownloadRequest { "dup", "m_123", {}, {}, {}, {} });
+    REQUIRE(first == "dup");
+    REQUIRE(second != first);
+    REQUIRE(f.pumpUntil([&] { return f.count(JobState::Done) == 2; }));
 }
 
 TEST_CASE("online_download: cleanPartials removes leftovers")
