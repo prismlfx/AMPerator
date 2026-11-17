@@ -119,4 +119,9 @@ describe('openExternal', () => {
     juce.fromBackend('__juce__complete', { promiseId: inv.payload.resultId, result: false });
     await expect(p).resolves.toBe(false);
   });
+
+  it('resolves false outside the app instead of rejecting', async () => {
+    delete (window as any).__JUCE__;
+    await expect(bridge.openExternal('https://www.tone3000.com/')).resolves.toBe(false);
+  });
 });

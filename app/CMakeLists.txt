@@ -53,12 +53,12 @@ juce_add_binary_data(amp_ui_data HEADER_NAME AmpUiData.h NAMESPACE AmpUiData SOU
 add_dependencies(amp_ui_data amp_ui)
 
 # ---- App ------------------------------------------------------------------------------------------------------
-target_sources(AMPerator PRIVATE Main.cpp MainWindow.cpp MainWindow.h PluginWindow.cpp PluginWindow.h Tone3000AuthWindow.cpp Tone3000AuthWindow.h MicrophonePermission.h MicrophonePermission.cpp BackgroundProcess.h)
+target_sources(AMPerator PRIVATE Main.cpp MainWindow.cpp MainWindow.h PluginWindow.cpp PluginWindow.h Tone3000AuthWindow.cpp Tone3000AuthWindow.h MicrophonePermission.h MicrophonePermission.cpp BackgroundProcess.h WebSessionCleaner.h)
 if(APPLE)
-  target_sources(AMPerator PRIVATE MicrophonePermission.mm BackgroundProcess.mm)
-  target_link_libraries(AMPerator PRIVATE "-framework AVFoundation")
+  target_sources(AMPerator PRIVATE MicrophonePermission.mm BackgroundProcess.mm WebSessionCleaner.mm)
+  target_link_libraries(AMPerator PRIVATE "-framework AVFoundation" "-framework WebKit")
 else()
-  target_sources(AMPerator PRIVATE BackgroundProcess.cpp)
+  target_sources(AMPerator PRIVATE BackgroundProcess.cpp WebSessionCleaner.cpp)
 endif()
 target_compile_definitions(AMPerator PRIVATE
   JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:AMPerator,JUCE_PRODUCT_NAME>"

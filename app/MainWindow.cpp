@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "PluginWindow.h"
 #include "Tone3000AuthWindow.h"
+#include "WebSessionCleaner.h"
 
 #include "Engine.h"
 #include "bridge/Bridge.h"
@@ -227,7 +228,7 @@ MainWindow::MainWindow(Engine& e)
     engine.onClearAuthCookies = [this]
     {
         closeAuthWindow();
-        juce::WebBrowserComponent::clearCookies();
+        clearWebSessionFor("tone3000.com");
     };
 
     setUsingNativeTitleBar(true);

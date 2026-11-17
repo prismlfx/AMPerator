@@ -1,5 +1,7 @@
 #include "Tone3000AuthWindow.h"
 
+#include "online/ExternalLinks.h"
+
 namespace amp
 {
 /** Shows third-party pages: https only (plus about:blank), the redirect is intercepted, never loaded. */
@@ -15,12 +17,13 @@ public:
 
     bool pageAboutToLoad(const juce::String& url) override
     {
-        if (redirectPrefix.isNotEmpty() && url.startsWith(redirectPrefix))
+        if (const auto query = online::callbackQuery(url, redirectPrefix))
         {
             if (! handled)
             {
                 handled = true;
-                redirected(url.fromFirstOccurrenceOf("?", false, false));
+                // an empty query ("closed by the user" to the engine) is still a callback: report it as canceled
+                redirected(query->isEmpty() ? juce::String("canceled=true") : *query);
             }
             return false;
         }
