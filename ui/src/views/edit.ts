@@ -4,12 +4,22 @@
 // a missing model or IR offers Locate… (pick the file from the library). Above the board: the rig's tags (style,
 // decade, band, song — setTags). Below the board: the master level (the Output node's `level`).
 
-import { call } from '../bridge';
+import { call, openExternal } from '../bridge';
 import { createKnob, throttle, type Knob } from '../components/knob';
 import { el, openMenu, toast, type MenuItem } from '../dialog';
 import { openArtDialog, openPluginPicker, pickAsset } from '../components/pickers';
 import { createTagEditor } from '../components/tagEditor';
 import { resolveArt, type NodeView } from '../art/archetypes';
+import {
+  connectTone3000,
+  jobsFor,
+  LONG_CALL_MS,
+  markUrl,
+  onJob,
+  sourceInfo,
+  type AssetSource,
+} from '../online/tone3000';
+import { openToneDetail } from './tone3000';
 import { setLearning, store, type AppState, type Mapping, type RigNode } from '../state';
 
 export interface ParamSpec {
@@ -65,6 +75,14 @@ const baseName = (path: string) => path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/
 const assetKind = (type: string) => (type === 'NamAmp' ? 'nam' : type === 'CabIR' ? 'ir' : '');
 const showError = (e: unknown) => toast((e as Error).message ?? String(e));
 
+/** The TONE3000 model id of a node whose file came from TONE3000 (the rig records only provider and model id). */
+function t3kModel(n: RigNode): string {
+  const source = (n.asset as { source?: { provider?: string; id?: string } } | undefined)?.source;
+  return source?.provider === 'tone3000' && source.id ? String(source.id) : '';
+}
+const downloading = (modelId: string) => jobsFor(modelId).some((j) => j.state !== 'done' && j.state !== 'failed');
+const TONE3000_PREFIX = 'https://www.tone3000.com/';
+
 function plugin(n: RigNode) {
   return n.plugin as { format?: string; uid?: string; name?: string; vendor?: string } | undefined;
 }
@@ -89,7 +107,7 @@ function cardKind(type: string): string {
 }
 
 /** Everything that needs the cards rebuilt. Params and bypass are updated in place (knobs may be mid-drag). */
-function structureKey(s: AppState): string {
+function structureKey(s: AppState, sources: Map<string, AssetSource>): string {
   if (!s.connected) return 'connecting';
   if (!s.rig) return 'none';
   return JSON.stringify({
@@ -98,6 +116,15 @@ function structureKey(s: AppState): string {
     mappings: s.rig.mappings ?? [],
     placeholders: s.report.placeholderNodeIds,
     expanded: [...expanded],
+    // TONE3000: what the cards show depends on the integration, the lookup and running downloads
+    t3k: [
+      s.tone3000.configured,
+      ...s.rig.nodes.filter(isChainNode).map((n) => {
+        const model = t3kModel(n);
+        const info = sources.get(model);
+        return model ? [model, info?.title, info?.creator?.username, info?.url, downloading(model)] : 0;
+      }),
+    ],
   });
 }
 
@@ -122,6 +149,24 @@ export function renderEdit(root: HTMLElement): void {
   let dragActive = false;
   // Bumped by every rebuild: knob/toggle senders of discarded cards check it and drop their sends.
   let generation = 0;
+
+  // TONE3000 provenance of the library's files by model id (title, creator, link), looked up for the rig's nodes.
+  let sources = new Map<string, AssetSource>();
+  let lookupKey = '';
+  let lookupRun = 0;
+  let disposed = false;
+  function refreshSources(s: AppState, force = false) {
+    const wanted = (s.rig?.nodes ?? []).map(t3kModel).filter(Boolean).join(',');
+    const k = `${s.rig?.id}/${wanted}`;
+    if ((k === lookupKey && !force) || wanted === '') return;
+    lookupKey = k;
+    const run = ++lookupRun;
+    void sourceInfo(force).then((found) => {
+      if (disposed || run !== lookupRun) return;
+      sources = found;
+      render(store.get());
+    });
+  }
 
   let tagsKey = '';
   function renderTags(s: AppState) {
@@ -149,7 +194,8 @@ export function renderEdit(root: HTMLElement): void {
 
   function render(s: AppState) {
     renderTags(s);
-    const k = structureKey(s);
+    refreshSources(s);
+    const k = structureKey(s, sources);
     if (k !== key && !dragActive) {
       key = k;
       rebuild(s);
@@ -233,7 +279,9 @@ export function renderEdit(root: HTMLElement): void {
     });
 
     const art = el('img', { class: 'card-art', src: resolveArt(n as NodeView), alt: '', draggable: 'false' });
-    const parts: Node[] = [el('div', { class: 'card-header' }, led, menuButton), art, el('div', { class: 'card-title' }, title)];
+    const model = t3kModel(n);
+    const mark = model ? [el('span', { class: 't3k-mark', title: 'From TONE3000' }, el('img', { src: markUrl(), alt: 'T3K', draggable: 'false' }))] : [];
+    const parts: Node[] = [el('div', { class: 'card-header' }, led, ...mark, menuButton), art, el('div', { class: 'card-title' }, title)];
 
     if (placeholder) {
       const original = plugin(n)?.name || (assetFile(n) ? baseName(assetFile(n)) : n.type);
@@ -242,6 +290,15 @@ export function renderEdit(root: HTMLElement): void {
         const locate = el('button', { class: 'asset-button', title: 'Find the file in the library' }, 'Locate…');
         locate.addEventListener('click', () => void pickAsset(n.id, assetKind(n.type) as 'nam' | 'ir'));
         parts.push(locate);
+      }
+      if (model && s.tone3000.configured) {
+        const busy = downloading(model);
+        const download = el('button', { class: 'asset-button', title: 'Download the missing model from TONE3000' }, busy ? 'Downloading…' : 'Download from TONE3000');
+        download.disabled = busy;
+        download.addEventListener('click', () => void downloadFromTone3000(n.id));
+        const replace = el('button', { class: 'asset-button', title: 'Pick a different model on TONE3000' }, 'Replace from TONE3000…');
+        replace.addEventListener('click', () => void browseTone3000(n, true));
+        parts.push(download, replace);
       }
     } else if (assetKind(n.type)) {
       const file = assetFile(n);
@@ -252,11 +309,20 @@ export function renderEdit(root: HTMLElement): void {
       );
       pick.addEventListener('click', () => void pickAsset(n.id, assetKind(n.type) as 'nam' | 'ir'));
       parts.push(pick);
+      if (!file && s.tone3000.configured) {
+        const browse = el('button', { class: 'asset-button', title: 'Find one on TONE3000' }, 'Browse TONE3000');
+        browse.addEventListener('click', () => void browseTone3000(n, false));
+        parts.push(browse);
+      }
     } else if (n.type === 'Plugin' && plugin(n)?.vendor) {
       parts.push(el('div', { class: 'card-sub' }, plugin(n)!.vendor!));
     }
 
-    if (isOpen) parts.push(buildControls(n));
+    if (isOpen) {
+      const credit = model ? buildCredit(sources.get(model)) : null;
+      if (credit) parts.push(credit);
+      parts.push(buildControls(n));
+    }
 
     const labels = (s.rig?.mappings ?? []).filter((m: Mapping) => m.node === n.id).map((m) => controlLabel(m.control));
     if (labels.length > 0) parts.push(el('div', { class: 'fs-label', title: 'Footswitch' }, labels.join(' · ')));
@@ -285,6 +351,20 @@ export function renderEdit(root: HTMLElement): void {
     card.addEventListener('pointerdown', (e) => startPointer(e, card, n.id, index));
     cards.set(n.id, card);
     return card;
+  }
+
+  /** "<tone title> · <creator>" with a link to the tone's page, from the library's provenance record. */
+  function buildCredit(info: AssetSource | undefined): HTMLElement | null {
+    const text = [info?.title, info?.creator?.username].filter(Boolean).join(' · ');
+    if (!info || !text) return null;
+    const box = el('div', { class: 'card-credit' }, el('span', { class: 'card-credit-text', title: text }, text));
+    const url = info.url ?? '';
+    if (url.startsWith(TONE3000_PREFIX)) {
+      const view = el('button', { class: 'asset-button', title: url }, 'View on TONE3000');
+      view.addEventListener('click', () => void openExternal(url));
+      box.append(view);
+    }
+    return box;
   }
 
   function buildControls(n: RigNode): HTMLElement {
@@ -405,6 +485,14 @@ export function renderEdit(root: HTMLElement): void {
       items.push({ label: n.type === 'NamAmp' ? 'Choose model…' : 'Choose IR…', run: () => void pickAsset(n.id, assetKind(n.type) as 'nam' | 'ir') });
     if (placeholder && assetKind(n.type))
       items.push({ label: 'Locate…', run: () => void pickAsset(n.id, assetKind(n.type) as 'nam' | 'ir') });
+    const model = t3kModel(n);
+    const t3k = store.get().tone3000.configured;
+    if (t3k && !placeholder && assetKind(n.type)) items.push({ label: 'Browse TONE3000…', run: () => void browseTone3000(n, false) });
+    if (t3k && placeholder && model && assetKind(n.type))
+      items.push(
+        { label: 'Download from TONE3000', run: () => void downloadFromTone3000(n.id) },
+        { label: 'Replace from TONE3000…', run: () => void browseTone3000(n, true) },
+      );
     if (!placeholder && n.type === 'Plugin')
       items.push({ label: 'Open editor', run: () => call('openPluginEditor', { id: n.id }).catch(showError) });
     const mapped = (store.get().rig?.mappings ?? []).filter((m) => m.node === n.id);
@@ -444,6 +532,34 @@ export function renderEdit(root: HTMLElement): void {
     }
   }
 
+  // ---- TONE3000 ----
+  const signedIn = async () => store.get().tone3000.connected || (await connectTone3000());
+
+  /** The TONE3000 picker for node `n` (signing in first), then the chosen tone's window targeted at the node. With
+      `replace` the picker opens on the tone the node's file came from, when the library knows it. */
+  async function browseTone3000(n: RigNode, replace: boolean) {
+    try {
+      if (!(await signedIn())) return;
+      const loadTone = replace ? (await sourceInfo()).get(t3kModel(n))?.toneId : undefined;
+      const r = await call<{ toneId?: string; canceled?: boolean }>(
+        'tone3000Browse',
+        { format: assetKind(n.type), nodeId: n.id, ...(loadTone ? { loadTone } : {}) },
+        LONG_CALL_MS,
+      );
+      if (!r.canceled && r.toneId) void openToneDetail(r.toneId, { nodeId: n.id });
+    } catch (e) {
+      showError(e);
+    }
+  }
+
+  async function downloadFromTone3000(id: string) {
+    try {
+      if (await signedIn()) await call('tone3000Fetch', { nodeIds: [id] });
+    } catch (e) {
+      showError(e);
+    }
+  }
+
   // ---- footswitch learn ----
   async function learn(id: string) {
     try {
@@ -455,8 +571,14 @@ export function renderEdit(root: HTMLElement): void {
   }
 
   const unsubscribe = store.subscribe(render);
+  const unsubscribeJobs = onJob((j) => {
+    if (j.state === 'done') refreshSources(store.get(), true);
+    render(store.get()); // Download buttons follow the jobs
+  });
   disposers.set(root, () => {
+    disposed = true;
     unsubscribe();
+    unsubscribeJobs();
     tagEditor.dispose();
     generation++;
     for (const k of knobs.values()) k.dispose();

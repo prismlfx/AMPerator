@@ -39,13 +39,13 @@ const card = (id: string) => root.querySelector<HTMLElement>(`.card[data-node-id
 const menuItem = (label: string) =>
   [...document.querySelectorAll<HTMLButtonElement>('.menu [role="menuitem"]')].find((b) => b.textContent === label)!;
 
-async function started(rig: object = makeRig(), report: object = emptyReport) {
+async function started(rig: object = makeRig(), report: object = emptyReport, tone3000: object = {}) {
   const p = state.initStore();
   const getState = juce.commands().find((c) => c.cmd === 'getState')!;
   juce.reply(getState.id, true, {
     protocol: 1, rig, report, dirty: false, saved: true, learning: false, startupErrors: [], settings: {},
     deviceStatus: { status: 'Running', latencyMs: 8, xruns: 0 }, controlStatus: { hid: 'NotFound', exclusive: false, midiDevices: [] },
-    tunerOn: false, favorites: [], recents: [], bands: ['Zeppelin'],
+    tunerOn: false, favorites: [], recents: [], bands: ['Zeppelin'], tone3000,
   });
   await p;
 }
@@ -449,5 +449,181 @@ describe('library', () => {
     [...document.querySelectorAll<HTMLButtonElement>('.modal button')].find((b) => b.textContent === 'Move to Trash')!.click();
     await flush();
     expect(lastCommand()).toMatchObject({ cmd: 'deleteRig', args: { id: 'a' } });
+  });
+});
+
+describe('TONE3000', () => {
+  const user = { username: 'ada', displayName: 'Ada', avatarUrl: '', url: 'https://www.tone3000.com/ada' };
+  const connected = { configured: true, connected: true, busy: false, remembered: true, user };
+  const signedOut = { configured: true, connected: false, busy: false, remembered: true, user: null };
+  const unconfigured = { configured: false, connected: false, busy: false, remembered: true, user: null };
+  const t3kSource = { provider: 'tone3000', id: 'm9' };
+  const t3kRig = () => {
+    const rig = makeRig();
+    (rig.nodes[2] as any).asset = { kind: 'nam', file: '/m/Plexi.nam', sha256: 'x', source: t3kSource };
+    return rig;
+  };
+  const rightClick = (id: string) => card(id).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 5, clientY: 5 }));
+  const buttonIn = (id: string, text: string) => [...card(id).querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === text);
+  const menuLabels = () => [...document.querySelectorAll('.menu [role="menuitem"]')].map((b) => b.textContent);
+  const assetsReply = (asset: object) => async () => {
+    for (const c of juce.commands().filter((c) => c.cmd === 'listAssets').slice(-2))
+      juce.reply(c.id, true, { assets: c.args.kind === 'nam' ? [asset] : [] });
+    await flush();
+  };
+  const sourced = { file: '/m/Plexi.nam', name: 'Plexi', kind: 'nam', sha256: 'x', source: { provider: 'tone3000', id: 'm9', toneId: 't9', title: 'Plexi Crunch', creator: { username: 'zed' }, license: 'cc-by', url: 'https://www.tone3000.com/tones/t9', image: '' } };
+
+  it('the node menu offers Browse TONE3000… for a NAM amp and opens the picker for that node', async () => {
+    await started(makeRig(), emptyReport, connected);
+    edit.renderEdit(root);
+    rightClick('amp');
+    expect(menuLabels()).toContain('Browse TONE3000…');
+    menuItem('Browse TONE3000…').click();
+    await flush();
+    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Browse', args: { format: 'nam', nodeId: 'amp' } });
+    juce.reply(lastCommand().id, true, { toneId: 't5', nodeId: 'amp' });
+    await flush();
+    expect(juce.commands().find((c) => c.cmd === 'tone3000Tone')).toMatchObject({ args: { id: 't5' } });
+  });
+
+  it('uses the IR format for a cab and does not offer it on other nodes', async () => {
+    await started(makeRig(), emptyReport, connected);
+    edit.renderEdit(root);
+    rightClick('cab');
+    menuItem('Browse TONE3000…').click();
+    await flush();
+    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Browse', args: { format: 'ir', nodeId: 'cab' } });
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    rightClick('eq');
+    expect(menuLabels()).not.toContain('Browse TONE3000…');
+  });
+
+  it('signs in first when not connected, and stops when the sign-in is canceled', async () => {
+    await started(makeRig(), emptyReport, signedOut);
+    edit.renderEdit(root);
+    rightClick('amp');
+    menuItem('Browse TONE3000…').click();
+    await flush();
+    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Connect' });
+    juce.reply(lastCommand().id, true, { canceled: true });
+    await flush();
+    expect(juce.commands().some((c) => c.cmd === 'tone3000Browse')).toBe(false);
+  });
+
+  it('shows no TONE3000 entries when the build has no client id', async () => {
+    const rig = t3kRig();
+    await started(rig, { ...emptyReport, placeholderNodeIds: ['amp'], fetchable: ['amp'] }, unconfigured);
+    edit.renderEdit(root);
+    expect(buttonIn('amp', 'Download from TONE3000')).toBeUndefined();
+    rightClick('amp');
+    expect(menuLabels().filter((l) => l!.includes('TONE3000'))).toEqual([]);
+  });
+
+  it('an empty NamAmp card has a Browse TONE3000 button beside the chooser', async () => {
+    const rig = makeRig();
+    delete (rig.nodes[2] as any).asset;
+    await started(rig, emptyReport, connected);
+    edit.renderEdit(root);
+    expect(buttonIn('amp', 'Choose model…')).toBeDefined();
+    buttonIn('amp', 'Browse TONE3000')!.click();
+    await flush();
+    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Browse', args: { format: 'nam', nodeId: 'amp' } });
+    expect(buttonIn('cab', 'Browse TONE3000')).toBeUndefined(); // it has a file
+  });
+
+  it('a missing node with a TONE3000 source offers Download from TONE3000 and Replace from TONE3000… beside Locate…', async () => {
+    await started(t3kRig(), { ...emptyReport, placeholderNodeIds: ['amp'], fetchable: ['amp'] }, connected);
+    edit.renderEdit(root);
+    expect(buttonIn('amp', 'Locate…')).toBeDefined();
+    expect(buttonIn('amp', 'Replace from TONE3000…')).toBeDefined();
+    buttonIn('amp', 'Download from TONE3000')!.click();
+    await flush();
+    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Fetch', args: { nodeIds: ['amp'] } });
+
+    rightClick('amp');
+    expect(menuLabels()).toEqual(expect.arrayContaining(['Download from TONE3000', 'Replace from TONE3000…', 'Locate…']));
+    expect(menuLabels()).not.toContain('Browse TONE3000…');
+  });
+
+  it('Download from TONE3000 reports the engine error', async () => {
+    await started(t3kRig(), { ...emptyReport, placeholderNodeIds: ['amp'], fetchable: ['amp'] }, connected);
+    edit.renderEdit(root);
+    buttonIn('amp', 'Download from TONE3000')!.click();
+    await flush();
+    juce.reply(lastCommand().id, false, 'not connected');
+    await flush();
+    expect(document.body.textContent).toContain('not connected');
+  });
+
+  it('Replace from TONE3000… opens the picker on the known tone, or plain when unknown', async () => {
+    await started(t3kRig(), { ...emptyReport, placeholderNodeIds: ['amp'], fetchable: ['amp'] }, connected);
+    edit.renderEdit(root);
+    await flush();
+    await assetsReply(sourced)();
+    buttonIn('amp', 'Replace from TONE3000…')!.click();
+    await flush();
+    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Browse', args: { format: 'nam', nodeId: 'amp', loadTone: 't9' } });
+  });
+
+  it('Replace from TONE3000… omits loadTone when the library does not know the tone', async () => {
+    await started(t3kRig(), { ...emptyReport, placeholderNodeIds: ['amp'], fetchable: ['amp'] }, connected);
+    edit.renderEdit(root);
+    await flush();
+    for (const c of juce.commands().filter((c) => c.cmd === 'listAssets')) juce.reply(c.id, true, { assets: [] });
+    await flush();
+    buttonIn('amp', 'Replace from TONE3000…')!.click();
+    await flush();
+    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Browse', args: { format: 'nam', nodeId: 'amp' } });
+    expect('loadTone' in (lastCommand().args as object)).toBe(false);
+  });
+
+  it('a card with a TONE3000 source shows the T3K mark, and its title and creator when expanded', async () => {
+    await started(t3kRig(), emptyReport, connected);
+    edit.renderEdit(root);
+    const mark = card('amp').querySelector('.t3k-mark')!;
+    expect(mark).not.toBeNull();
+    expect(mark.getAttribute('title')).toBe('From TONE3000');
+    expect(card('cab').querySelector('.t3k-mark')).toBeNull();
+    await flush();
+    await assetsReply(sourced)();
+    pointer('pointerdown', card('amp').querySelector('.card-title')!, 50);
+    pointer('pointerup', window, 50);
+    expect(card('amp').querySelector('.card-credit-text')!.textContent).toBe('Plexi Crunch · zed');
+    buttonIn('amp', 'View on TONE3000')!.click();
+    await flush();
+    const opened = juce.sent.filter((x) => x.eventId === '__juce__invoke' && x.payload.name === 'openExternal');
+    expect(opened.at(-1)!.payload.params).toEqual(['https://www.tone3000.com/tones/t9']);
+  });
+
+  it('does not offer View on TONE3000 for a link outside tone3000.com, and renders titles as text', async () => {
+    await started(t3kRig(), emptyReport, connected);
+    edit.renderEdit(root);
+    await flush();
+    await assetsReply({ ...sourced, source: { ...sourced.source, title: '<b>x</b>', url: 'https://evil.example/t' } })();
+    pointer('pointerdown', card('amp').querySelector('.card-title')!, 50);
+    pointer('pointerup', window, 50);
+    expect(buttonIn('amp', 'View on TONE3000')).toBeUndefined();
+    expect(card('amp').querySelector('.card-credit-text')!.textContent).toBe('<b>x</b> · zed');
+    expect(card('amp').querySelector('.card-credit b')).toBeNull();
+  });
+
+  it('shows the mark but no credit line when the lookup knows nothing', async () => {
+    await started(t3kRig(), emptyReport, connected);
+    edit.renderEdit(root);
+    await flush();
+    for (const c of juce.commands().filter((c) => c.cmd === 'listAssets')) juce.reply(c.id, true, { assets: [] });
+    await flush();
+    pointer('pointerdown', card('amp').querySelector('.card-title')!, 50);
+    pointer('pointerup', window, 50);
+    expect(card('amp').querySelector('.t3k-mark')).not.toBeNull();
+    expect(card('amp').querySelector('.card-credit')).toBeNull();
+  });
+
+  it('a card with a provider image draws it', async () => {
+    const rig = t3kRig();
+    (rig.nodes[2] as any).art = { archetype: '', image: '', snapshot: '', providerImage: '/lib/Art/tone3000/t9.jpg' };
+    await started(rig, emptyReport, connected);
+    edit.renderEdit(root);
+    expect(card('amp').querySelector('img.card-art')!.getAttribute('src')).toBe('art/tone3000/t9.jpg');
   });
 });

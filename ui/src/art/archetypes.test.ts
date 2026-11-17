@@ -9,7 +9,7 @@ describe('resolveArt', () => {
   it('user image wins over everything', () => {
     const n = node('Plugin', {
       image: '/Users/me/Music/AMPerator/Art/my photo.png',
-      providerImage: 'https://example.invalid/amp.jpg',
+      providerImage: '/Users/me/Music/AMPerator/Art/tone3000/t.jpg',
       snapshot: '/Users/me/Music/AMPerator/Art/cache/VST3-Delay.png',
       archetype: 'delay',
     });
@@ -17,8 +17,13 @@ describe('resolveArt', () => {
   });
 
   it('provider image comes before the plugin snapshot', () => {
-    const n = node('Plugin', { providerImage: 'https://example.invalid/amp.jpg', snapshot: '/lib/Art/cache/x.png' });
-    expect(resolveArt(n)).toBe('https://example.invalid/amp.jpg');
+    const n = node('Plugin', { providerImage: '/lib/Art/tone3000/t.jpg', snapshot: '/lib/Art/cache/x.png' });
+    expect(resolveArt(n)).toBe('art/tone3000/t.jpg');
+  });
+
+  it('a provider image outside Art/ is ignored', () => {
+    const n = node('NamAmp', { providerImage: 'https://example.invalid/amp.jpg', archetype: 'ac-chime' });
+    expect(resolveArt(n)).toBe(archetypeUrl('ac-chime'));
   });
 
   it('plugin snapshot used for Plugin nodes without user image', () => {

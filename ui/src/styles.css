@@ -1652,3 +1652,49 @@ select:disabled {
   margin: 0;
   color: var(--danger);
 }
+
+/* ---- TONE3000 on the pedalboard and in settings ---- */
+.card-header .t3k-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.card-header .t3k-mark img {
+  height: 12px;
+  width: auto;
+  pointer-events: none;
+}
+.card-credit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: default;
+}
+.card-credit-text {
+  overflow-wrap: anywhere;
+}
+.asset-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.settings-tone3000 {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.settings-tone3000 .field {
+  align-self: stretch;
+}
+.settings-tone3000 .check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.banner .button:disabled {
+  opacity: 0.6;
+}

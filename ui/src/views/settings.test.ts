@@ -197,3 +197,84 @@ describe('footswitch device', () => {
     expect(lastCommand()).toMatchObject({ cmd: 'setSettings', args: { footswitchDevice: null } });
   });
 });
+
+describe('TONE3000 section', () => {
+  const user = { username: 'ada', displayName: 'Ada', avatarUrl: '', url: 'https://www.tone3000.com/ada' };
+  const status = (over: object = {}) => ({ configured: true, connected: true, busy: false, remembered: true, user, ...over });
+  const section = () => [...document.querySelectorAll('.settings-section')].find((x) => x.querySelector('h3')?.textContent === 'TONE3000')!;
+  const sectionButton = (text: string) => [...section().querySelectorAll('button')].find((b) => b.textContent === text)!;
+  const send = (tone3000: object) => juce.fromBackend('amp', { v: 1, event: 'tone3000Status', data: tone3000 });
+
+  async function openedWith(tone3000: object, settings: object = baseSettings) {
+    const state = await import('../state');
+    const p = state.initStore();
+    juce.reply(juce.commands().find((c) => c.cmd === 'getState').id, true, {
+      protocol: 1, rig: null, report: {}, dirty: false, saved: false, learning: false, startupErrors: [], settings: {},
+      deviceStatus: { status: 'Running', latencyMs: 8, xruns: 0 }, controlStatus: { hid: 'NotFound', exclusive: false, midiDevices: [] },
+      tunerOn: false, favorites: [], recents: [], bands: [], tone3000,
+    });
+    await p;
+    await opened(settings);
+  }
+
+  it('shows the status, Disconnect and the auto-fetch checkbox, which sends setSettings{tone3000AutoFetch}', async () => {
+    await openedWith(status());
+    expect(section().textContent).toContain('Connected as ada');
+    expect(section().textContent).not.toContain('will not be remembered');
+    expect(sectionButton('Disconnect')).toBeDefined();
+    expect(section().querySelector('input[type="text"]')).toBeNull(); // the build has a client id
+    const box = section().querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(section().textContent).toContain('Download missing TONE3000 models automatically when opening a rig');
+    expect(box.checked).toBe(false);
+    box.checked = true;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(lastCommand()).toMatchObject({ cmd: 'setSettings', args: { tone3000AutoFetch: true } });
+    juce.reply(lastCommand().id, true, { ...baseSettings, tone3000AutoFetch: true });
+    await flush();
+    expect(section().querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true);
+  });
+
+  it('Disconnect sends tone3000Disconnect', async () => {
+    await openedWith(status());
+    sectionButton('Disconnect').click();
+    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Disconnect' });
+  });
+
+  it('when signed out: Not connected and Connect TONE3000, which starts the sign-in', async () => {
+    await openedWith(status({ connected: false, user: null }));
+    expect(section().textContent).toContain('Not connected');
+    sectionButton('Connect TONE3000').click();
+    expect(lastCommand()).toMatchObject({ cmd: 'tone3000Connect' });
+  });
+
+  it('says when the sign-in will not be remembered', async () => {
+    await openedWith(status({ remembered: false }));
+    expect(section().textContent).toContain('Sign-in will not be remembered on this Mac.');
+  });
+
+  it('follows status changes while open and stops after closing', async () => {
+    await openedWith(status({ connected: false, user: null }));
+    send(status());
+    expect(section().textContent).toContain('Connected as ada');
+    expect(sectionButton('Disconnect')).toBeDefined();
+    document.querySelector<HTMLButtonElement>('.modal-settings [aria-label="Close"]')!.click(); // (an earlier test's modal may swallow Esc)
+    expect(document.querySelector('.settings-section')).toBeNull();
+    send(status({ connected: false, user: null })); // nothing left to update, and nothing throws
+  });
+
+  it('without a client id in the build: says so and offers the client-id field', async () => {
+    await openedWith({ configured: false, connected: false, busy: false, remembered: true, user: null });
+    expect(section().textContent).toContain('This build has no TONE3000 client id.');
+    expect(section().textContent).toContain('Client id (takes effect after restarting AMPerator)');
+    expect(sectionButton('Connect TONE3000')).toBeUndefined();
+    const input = section().querySelector<HTMLInputElement>('input[type="text"]')!;
+    input.value = ' pk_test_1 ';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(lastCommand()).toMatchObject({ cmd: 'setSettings', args: { tone3000ClientId: 'pk_test_1' } });
+  });
+
+  it('shows the client-id field when one is set, even in a configured build', async () => {
+    await openedWith(status(), { ...baseSettings, tone3000ClientId: 'pk_mine' });
+    expect(section().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe('pk_mine');
+  });
+});

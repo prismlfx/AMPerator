@@ -1,6 +1,6 @@
 // Node art (spec §6): the picture shown for a node, first available of
 //   1. the user's image (node.art.image, a file in the library's Art/ folder),
-//   2. the asset's provider image (node.art.providerImage; unused until sub-project 3),
+//   2. the asset's provider image (node.art.providerImage, a file in Art/tone3000/ the engine downloaded),
 //   3. a snapshot of the plugin's editor (node.art.snapshot, Art/cache/; Plugin nodes only),
 //   4. built-in archetype art: node.art.archetype, else guessed from the node's type and name, else generic.
 // The built-in drawings (./*.svg) are generic gear with no brand names or logos. The keyword lists below only
@@ -11,7 +11,7 @@ import type { RigNode } from '../state';
 export interface NodeArt {
   archetype?: string;
   image?: string; // absolute path of the user's image in Art/
-  providerImage?: string; // URL (sub-project 3)
+  providerImage?: string; // absolute path of the provider's picture in Art/tone3000/ ("" when none)
   snapshot?: string; // absolute path of the plugin editor snapshot in Art/cache/
 }
 
@@ -138,7 +138,8 @@ export function resolveArt(n: NodeView): string {
   const art = n.art ?? {};
   const image = artUrl(art.image);
   if (image) return image;
-  if (art.providerImage) return art.providerImage;
+  const provider = artUrl(art.providerImage);
+  if (provider) return provider;
   if (n.type === 'Plugin') {
     const snapshot = artUrl(art.snapshot);
     if (snapshot) return snapshot;

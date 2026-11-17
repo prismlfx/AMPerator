@@ -3,6 +3,7 @@
 
 import './styles.css';
 import { call } from './bridge';
+import { connectTone3000, jobsFor, onJob } from './online/tone3000';
 import { el, toast } from './dialog';
 import {
   confirmDiscardIfDirty,
@@ -140,6 +141,30 @@ document.addEventListener('keydown', (e) => {
 
 let connectionError = '';
 let dismissedReport = ''; // the load report whose banner the user closed
+let dismissedFetchable = ''; // the same for the missing-TONE3000-models banner
+let fetching = false; // a Download from that banner is being started
+
+/** Model ids of the rig's nodes the engine can restore from TONE3000. */
+function fetchableModels(s: AppState): string[] {
+  return s.report.fetchable.flatMap((id) => {
+    const source = (s.rig?.nodes.find((n) => n.id === id)?.asset as { source?: { id?: string } } | undefined)?.source;
+    return source?.id ? [String(source.id)] : [];
+  });
+}
+
+async function downloadMissing() {
+  fetching = true;
+  render(store.get());
+  try {
+    if (store.get().tone3000.connected || (await connectTone3000())) await call('tone3000Fetch', {});
+  } catch (e) {
+    toast((e as Error).message);
+  } finally {
+    fetching = false;
+    render(store.get());
+  }
+}
+onJob(() => render(store.get())); // the Download button follows the jobs
 
 function render(s: AppState) {
   syncRigFields(s);
@@ -171,6 +196,24 @@ function renderBanners(s: AppState) {
         render(store.get());
       }),
     );
+  const n = s.report.fetchable.length;
+  const fetchKey = JSON.stringify([s.rig?.id, s.report.fetchable]);
+  if (n > 0 && s.tone3000.configured && fetchKey !== dismissedFetchable) {
+    const active = fetching || fetchableModels(s).some((m) => jobsFor(m).some((j) => j.state !== 'done' && j.state !== 'failed'));
+    const download = el('button', { class: 'button small' }, active ? 'Downloading…' : 'Download');
+    download.disabled = active;
+    download.addEventListener('click', () => void downloadMissing());
+    items.push(
+      banner(
+        `${n} model${n === 1 ? '' : 's'} from TONE3000 ${n === 1 ? 'is' : 'are'} missing.`,
+        () => {
+          dismissedFetchable = fetchKey;
+          render(store.get());
+        },
+        download,
+      ),
+    );
+  }
   s.startupErrors.forEach((e, i) => {
     const dismiss = () => dismissStartupError(i);
     if (e.context === 'loadRig' && e.rigId) {

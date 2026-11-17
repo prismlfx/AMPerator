@@ -3,6 +3,7 @@
 
 import { call, invokeNative } from '../bridge';
 import { el, openModal, toast } from '../dialog';
+import { connectTone3000, type Tone3000Status } from '../online/tone3000';
 import { setSettings, store, type AppState, type ControlStatus, type DeviceStatus, type Settings } from '../state';
 
 let openInstance: { close(): void } | null = null;
@@ -19,6 +20,7 @@ export function openSettings() {
   const folders = el('div', { class: 'settings-folders' });
   const controls = el('div', { class: 'settings-controls' });
   const deviceBox = el('div', { class: 'footswitch-device' });
+  const t3k = el('div', { class: 'settings-tone3000' });
   const disabled = el('div', { class: 'settings-disabled' }, el('p', { class: 'muted' }, 'Loading…'));
   let keyboards: HidKeyboard[] | null = null; // listed on request (Choose device…)
 
@@ -35,6 +37,7 @@ export function openSettings() {
     section('Audio', form, status),
     section('Watched folders', folders),
     section('Footswitch & MIDI', controls, deviceBox),
+    section('TONE3000', t3k),
     section('Disabled plugins', disabled),
   );
 
@@ -68,6 +71,7 @@ export function openSettings() {
     renderForm();
     renderFolders();
     renderDevice();
+    renderTone3000();
   }
 
   function renderDevice() {
@@ -89,6 +93,15 @@ export function openSettings() {
       }),
       choose,
     );
+  }
+
+  function renderTone3000() {
+    t3k.replaceChildren(...tone3000View(store.get().tone3000, settings, busy, {
+      connect: () => void connectTone3000(), // toasts its own errors; the tone3000Status event updates the section
+      disconnect: () => void call('tone3000Disconnect').catch((e) => toast((e as Error).message)),
+      autoFetch: (on) => void apply({ tone3000AutoFetch: on }),
+      clientId: (id) => void apply({ tone3000ClientId: id }),
+    }));
   }
 
   async function loadDisabled() {
@@ -128,6 +141,7 @@ export function openSettings() {
     busy = true;
     renderForm();
     renderFolders();
+    renderTone3000();
     try {
       accept(await call<Settings>('setSettings', patch));
     } catch (e) {
@@ -137,6 +151,7 @@ export function openSettings() {
       busy = false;
       renderForm();
       renderFolders();
+      renderTone3000();
     }
   }
 
@@ -222,7 +237,13 @@ export function openSettings() {
     );
   }
 
+  let t3kKey = '';
   function renderLive(s: AppState) {
+    const key = JSON.stringify(s.tone3000);
+    if (key !== t3kKey) {
+      t3kKey = key;
+      renderTone3000();
+    }
     status.replaceChildren(...deviceStatusView(s.deviceStatus));
     controls.replaceChildren(...controlStatusView(s.controlStatus, footswitchActions));
     const assigning = !!s.controlStatus.assigning;
@@ -238,6 +259,41 @@ export function openSettings() {
   renderLive(store.get());
   void load();
   void loadDisabled();
+}
+
+export interface Tone3000Actions {
+  connect(): void;
+  disconnect(): void;
+  autoFetch(on: boolean): void;
+  clientId(id: string): void;
+}
+
+/** The TONE3000 section: sign-in status and button, the auto-fetch option, and the client id (shown when the build
+    has none, or when one was typed in; it takes effect after a restart). */
+export function tone3000View(status: Tone3000Status, settings: Partial<Settings> | null, busy: boolean, actions: Tone3000Actions): Node[] {
+  const out: Node[] = [];
+  if (!status.configured) out.push(el('p', { class: 'muted' }, 'This build has no TONE3000 client id.'));
+  else {
+    const line = status.connected ? `Connected as ${status.user?.username ?? 'your account'}` : 'Not connected';
+    out.push(el('p', { class: 'tone3000-status' }, line));
+    if (!status.remembered) out.push(el('p', { class: 'hint' }, 'Sign-in will not be remembered on this Mac.'));
+    const button = el('button', { class: 'button small', type: 'button' }, status.connected ? 'Disconnect' : 'Connect TONE3000');
+    button.disabled = status.busy;
+    button.addEventListener('click', () => (status.connected ? actions.disconnect() : actions.connect()));
+    const box = el('input', { type: 'checkbox' });
+    box.checked = !!settings?.tone3000AutoFetch;
+    box.disabled = busy || !settings;
+    box.addEventListener('change', () => actions.autoFetch(box.checked));
+    out.push(button, el('label', { class: 'check' }, box, el('span', {}, 'Download missing TONE3000 models automatically when opening a rig')));
+  }
+  if (!status.configured || settings?.tone3000ClientId) {
+    const input = el('input', { type: 'text', spellcheck: 'false', autocomplete: 'off' });
+    input.value = settings?.tone3000ClientId ?? '';
+    input.disabled = busy || !settings;
+    input.addEventListener('change', () => actions.clientId(input.value.trim()));
+    out.push(field('Client id (takes effect after restarting AMPerator)', input));
+  }
+  return out;
 }
 
 interface DisabledPlugin {

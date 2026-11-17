@@ -205,3 +205,53 @@ export async function startDownload(args: DownloadArgs, title?: string): Promise
     if (title && pendingTitles.get(args.modelId) === title) pendingTitles.delete(args.modelId);
   }
 }
+
+// ---- Where a rig node's file came from ----
+
+/** The provenance listAssets reports for a library file that came from TONE3000. */
+export interface AssetSource {
+  provider?: string;
+  id?: string; // the model id (what a rig node's asset.source.id holds)
+  toneId?: string;
+  title?: string;
+  creator?: { username?: string };
+  license?: string;
+  url?: string;
+  image?: string;
+}
+
+let sources: Promise<Map<string, AssetSource>> | null = null;
+let invalidating = false;
+
+function watchSources() {
+  if (invalidating) return;
+  invalidating = true;
+  on('rigLoaded', () => (sources = null));
+  onJob((j) => {
+    if (j.state === 'done') sources = null;
+  });
+}
+
+/** Provenance of the library's TONE3000 files, by model id (listAssets nam + ir). Cached; dropped when a download
+    finishes or a rig is loaded (`fresh` skips the cache, for a caller that runs before those listeners do). A failing
+    lookup resolves to an empty map and is not cached. */
+export function sourceInfo(fresh = false): Promise<Map<string, AssetSource>> {
+  watchSources();
+  if (sources && !fresh) return sources;
+  const lookup = Promise.all(
+    (['nam', 'ir'] as const).map((kind) => call<{ assets: { source?: AssetSource }[] }>('listAssets', { kind })),
+  ).then(
+    (lists) => {
+      const map = new Map<string, AssetSource>();
+      for (const { assets } of lists)
+        for (const a of assets) if (a.source?.id && (!a.source.provider || a.source.provider === 'tone3000')) map.set(String(a.source.id), a.source);
+      return map;
+    },
+    () => {
+      if (sources === lookup) sources = null;
+      return new Map<string, AssetSource>();
+    },
+  );
+  sources = lookup;
+  return lookup;
+}
