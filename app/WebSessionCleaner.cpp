@@ -10,4 +10,6 @@ void clearWebSessionFor(const juce::String&, std::function<void()> done)
     if (done)
         juce::MessageManager::callAsync(std::move(done));
 }
+
+void disableSharedUrlCache() {}
 } // namespace amp

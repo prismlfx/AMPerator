@@ -3,6 +3,7 @@
 #include "MainWindow.h"
 #include "bridge/Bridge.h"
 #include "MicrophonePermission.h"
+#include "WebSessionCleaner.h"
 #include "plugins/PluginScanner.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -43,6 +44,8 @@ public:
             runHeadlessScan(); // `AMPerator --scan-plugins`: scan from a terminal, progress on stdout
             return;
         }
+
+        amp::disableSharedUrlCache(); // before the Engine: its TONE3000 service may already make requests
 
         amp::Engine::Options options; // the Engine owns the AudioDeviceManager
         options.deferAudioStart = true;

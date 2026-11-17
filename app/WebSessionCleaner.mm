@@ -37,4 +37,14 @@ void clearWebSessionFor(const juce::String& domainSuffix, std::function<void()> 
         [store removeDataOfTypes:types forDataRecords:matching completionHandler:^{ finish(); }];
     }];
 }
+void disableSharedUrlCache()
+{
+    // JUCE's NSURLSession uses defaultSessionConfiguration, whose URLCache is the shared one, read when that session
+    // is created at the first request: hence before anything goes on the network.
+    NSURLCache* cache = [[NSURLCache alloc] initWithMemoryCapacity:0 diskCapacity:0 diskPath:nil];
+    NSURLCache.sharedURLCache = cache;
+#if ! __has_feature(objc_arc)
+    [cache release];
+#endif
+}
 } // namespace amp
