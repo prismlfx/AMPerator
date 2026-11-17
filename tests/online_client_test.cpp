@@ -291,16 +291,20 @@ TEST_CASE("online_client: 401 forces one refresh and retries once with the new t
     REQUIRE(header(gets[1], "Authorization") == "Bearer NEW"); // re-sent, with the refreshed token
 }
 
-TEST_CASE("online_client: a second 401 is an error, not a loop")
+TEST_CASE("online_client: a second 401 after the forced refresh signs out, not a loop")
 {
     ClientFixture f;
+    int signedOut = 0;
+    f.auth->onSignedOut = [&] { ++signedOut; };
     f.http.on("POST", api + "/oauth/token", [](const HttpRequest&) { return FakeHttp::json(200, refreshedTokens); });
     f.http.on("GET", api + "/user", [](const HttpRequest&) { return FakeHttp::json(401, "{}"); });
     auto r = f.client->user();
-    REQUIRE(r.error);
-    REQUIRE(r.error.message.contains("401"));
+    REQUIRE(r.error.kind == ClientError::Kind::NotConnected);
     REQUIRE(refreshRequests(f.http) == 1);
     REQUIRE(f.http.requestCount() == 3); // GET, refresh, GET
+    REQUIRE(signedOut == 1);
+    REQUIRE_FALSE(f.auth->isConnected());
+    REQUIRE_FALSE(f.store.get("tokens").has_value());
 }
 
 TEST_CASE("online_client: 429 reports Retry-After and is not retried")
@@ -377,6 +381,7 @@ TEST_CASE("online_client: fetch streams to the file with the Bearer header")
     REQUIRE(reqs[0].toFile == out);
     REQUIRE(reqs[0].onProgress);
     REQUIRE(reqs[0].shouldCancel);
+    REQUIRE(reqs[0].timeoutMs == 20000); // an idle timeout: a stalled transfer ends within 20 s
     dir.deleteRecursively();
 }
 
@@ -413,8 +418,7 @@ TEST_CASE("online_client: an IR tone makes one unfiltered models request and kee
 
 TEST_CASE("online_client: fetch sends the token only to the same scheme, host and port")
 {
-    const juce::String bad[] = { "http://www.tone3000.com/api/v1/models/m_1/download",
-                                 "https://www.tone3000.com:8443/api/v1/models/m_1/download",
+    const juce::String bad[] = { "https://www.tone3000.com:8443/api/v1/models/m_1/download",
                                  "https://tone3000.com.evil.test/m.nam" };
     for (const auto& url : bad)
     {
@@ -454,4 +458,70 @@ TEST_CASE("online_client: fetch reports a 429 with Retry-After and does not retr
     REQUIRE(err.retryAfterSec == 11);
     REQUIRE(f.http.requestCount() == 1);
     dir.deleteRecursively();
+}
+
+TEST_CASE("online_client: fetch never sends the token through userinfo or cleartext http")
+{
+    // JUCE's URL parser reads the first of these as host www.tone3000.com, port 443, but the connection goes to
+    // evil.example; the same parser as the transport decides here.
+    const juce::String hostile[] = { "https://www.tone3000.com:443@evil.example/x", "https://user:pass@www.tone3000.com/x",
+                                     "http://www.tone3000.com/x" };
+    for (const auto& url : hostile)
+    {
+        INFO(url);
+        ClientFixture f;
+        f.http.on("GET", "", [](const HttpRequest&) { return FakeHttp::json(200, "x"); });
+        auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                       .getChildFile("amp_client_test_" + juce::String(juce::Random().nextInt64()));
+        dir.createDirectory();
+        const auto err = f.client->fetch(url, dir.getChildFile("m.nam"), {}, {});
+        REQUIRE(err); // refused: never fetched as if it were ours
+        for (const auto& req : f.http.snapshot())
+            REQUIRE(header(req, "Authorization") == "");
+        dir.deleteRecursively();
+    }
+}
+
+TEST_CASE("online_client: fetch to an http URL is allowed when the base itself is http")
+{
+    FakeHttp http;
+    MemorySecureStore store;
+    store.set("tokens", R"({"access":"AT","refresh":"RT","expiresAtMs":99000000})");
+    AuthConfig cfg;
+    cfg.clientId = "cid";
+    cfg.baseUrl = "http://127.0.0.1:8080";
+    Tone3000Auth auth(cfg, http, store, [] { return (juce::int64) 1000000; });
+    Tone3000Client client(auth, http, "http://127.0.0.1:8080");
+    http.on("GET", "", [](const HttpRequest&) { return FakeHttp::json(200, "x"); });
+    auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                   .getChildFile("amp_client_test_" + juce::String(juce::Random().nextInt64()));
+    dir.createDirectory();
+    REQUIRE_FALSE(client.fetch("http://127.0.0.1:8080/m.nam", dir.getChildFile("a.nam"), {}, {}));
+    REQUIRE_FALSE(client.fetch("http://cdn.example.test/m.jpg", dir.getChildFile("b.jpg"), {}, {}));
+    const auto reqs = http.snapshot();
+    REQUIRE(reqs.size() == 2);
+    REQUIRE(header(reqs[0], "Authorization") == "Bearer AT");
+    REQUIRE(header(reqs[1], "Authorization") == "");
+    dir.deleteRecursively();
+}
+
+TEST_CASE("online_client: model() and tone() pass the cancel callback to their requests")
+{
+    ClientFixture f;
+    f.serve("/models/m_123", "model.json");
+    f.serve("/tones/t_789", "tone_ir.json");
+    f.serve("/models?tone_id=t_789&page_size=300", "models_ir.json");
+    bool asked = false;
+    auto cancel = [&asked] { asked = true; return false; };
+    REQUIRE_FALSE(f.client->model("m_123", cancel).error);
+    REQUIRE_FALSE(f.client->tone("t_789", cancel).error);
+    const auto reqs = f.http.snapshot();
+    REQUIRE(reqs.size() == 3);
+    for (const auto& r : reqs)
+    {
+        REQUIRE(r.shouldCancel);
+        r.shouldCancel();
+        REQUIRE(r.timeoutMs == 15000);
+    }
+    REQUIRE(asked);
 }

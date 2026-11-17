@@ -1,7 +1,8 @@
 #pragma once
 
 // Typed, blocking REST client for the free-tier TONE3000 endpoints. Every call runs on a worker thread; it adds the
-// Bearer token from Tone3000Auth, retries once on 401, and maps failures to ClientError. 429 is never retried.
+// Bearer token from Tone3000Auth, retries once on 401 with a forced refresh (a second 401 signs out: auth.clear(),
+// NotConnected), and maps failures to ClientError. 429 is never retried.
 
 #include <functional>
 
@@ -20,9 +21,15 @@ public:
 
     Result<UserRef> user();                                // GET /api/v1/user
     Result<Page> list(const juce::String& kind, int page); // favorited | downloaded | created | trending | latest
-    Result<Tone> tone(const juce::String& id);             // the tone plus its A2 then A1 models ("custom" dropped)
-    Result<ModelInfo> model(const juce::String& id);
-    // GET `url` streamed to `to`. The Bearer header is sent only when the URL's host is the base URL's host.
+    // The tone plus its A2 then A1 models ("custom" dropped). `cancel` (optional) is polled by each request.
+    Result<Tone> tone(const juce::String& id, std::function<bool()> cancel = {});
+    Result<ModelInfo> model(const juce::String& id, std::function<bool()> cancel = {});
+    static constexpr int jsonTimeoutMs = 15000;  // metadata requests
+    static constexpr int fetchTimeoutMs = 20000; // file and image transfers (an idle timeout, not a total)
+
+    // GET `url` streamed to `to`. The Bearer header is sent only when the URL's origin (scheme, host, port, as the
+    // transport parses it) is the base URL's. Refused without a request: a URL with userinfo, a backslash or control
+    // characters ("unsupported URL"), and a non-https URL unless the base is http ("refused insecure URL").
     ClientError fetch(const juce::String& url, const juce::File& to,
                       std::function<void(juce::int64, juce::int64)> progress, std::function<bool()> cancel);
 
@@ -37,7 +44,7 @@ private:
 
     // Sends `req` with auth (when `authorize`), the 401 retry and status mapping.
     Reply send(HttpRequest req, bool authorize);
-    Reply getJson(const juce::String& path, juce::var& parsed);
+    Reply getJson(const juce::String& path, juce::var& parsed, std::function<bool()> cancel = {});
     juce::String apiUrl(const juce::String& path) const;
 
     Tone3000Auth& auth;

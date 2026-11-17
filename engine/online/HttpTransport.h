@@ -14,7 +14,7 @@ struct HttpRequest
                                               // Content-Type header is given
     juce::StringPairArray headers;
     juce::File toFile; // non-empty: the body is streamed to this file, response.body stays empty
-    int timeoutMs = 30000;
+    int timeoutMs = 15000; // the transport's connection/idle timeout
     std::function<void(juce::int64 received, juce::int64 total)> onProgress; // total = -1 when unknown
     std::function<bool()> shouldCancel;                                      // polled between chunks
 };

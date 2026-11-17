@@ -53,11 +53,12 @@ juce::String imageExtension(const juce::String& url)
     return "jpg";
 }
 
+// "gone" for a model TONE3000 no longer serves; otherwise the user-facing text (a 429 carries its Retry-After).
 juce::String errorText(const ClientError& e)
 {
     if (e.kind == ClientError::Kind::NotFound || e.kind == ClientError::Kind::Forbidden)
         return "gone";
-    return e.message;
+    return userMessage(e);
 }
 } // namespace
 
@@ -154,13 +155,14 @@ private:
         if (canceled())
             return fail(partial, "canceled");
 
-        auto model = owner.client.model(request.modelId);
+        const auto stop = [this] { return canceled(); };
+        auto model = owner.client.model(request.modelId, stop);
         if (model.error || ! model.value)
             return fail(partial, model.error ? errorText(model.error) : juce::String("invalid response"));
         if (canceled())
             return fail(partial, "canceled");
 
-        auto tone = owner.client.tone(model.value->toneId);
+        auto tone = owner.client.tone(model.value->toneId, stop);
         if (tone.error || ! tone.value)
             return fail(partial, tone.error ? errorText(tone.error) : juce::String("invalid response"));
         if (canceled())
@@ -288,14 +290,20 @@ void DownloadManager::cancel(const juce::String& jobId)
         it->second->store(true);
 }
 
-// May block for the HTTP timeout of an in-flight metadata request (only fetches poll the cancel flag). A Done event
-// dropped at destruction leaves its partial file behind; cleanPartials() removes it at the next start.
+// May block until an in-flight request returns (the transport's idle timeout at worst: JUCE cannot interrupt a
+// connection that is waiting for headers). A Done event dropped at destruction leaves its partial file behind;
+// cleanPartials() removes it at the next start.
 void DownloadManager::cancelAll()
+{
+    requestCancelAll();
+    std::unique_lock<std::mutex> guard(shared->lock);
+    shared->idle.wait(guard, [this] { return shared->running == 0; });
+}
+
+void DownloadManager::requestCancelAll()
 {
     for (auto& entry : active)
         entry.second->store(true);
-    std::unique_lock<std::mutex> guard(shared->lock);
-    shared->idle.wait(guard, [this] { return shared->running == 0; });
 }
 
 void DownloadManager::cleanPartials(const juce::File& dir)

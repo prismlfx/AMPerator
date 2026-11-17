@@ -18,6 +18,9 @@ class FakeHttp final : public amp::online::HttpTransport
 public:
     using Handler = std::function<amp::online::HttpResponse(const amp::online::HttpRequest&)>;
 
+    FakeHttp();
+    ~FakeHttp() override; // the last instance clears file()'s registry (no MemoryBlock outlives the tests)
+
     void on(const juce::String& method, const juce::String& urlPrefix, Handler handler);
     amp::online::HttpResponse request(const amp::online::HttpRequest& req) override;
 

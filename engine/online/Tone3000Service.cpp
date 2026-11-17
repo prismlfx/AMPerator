@@ -72,6 +72,9 @@ Tone3000Service::Tone3000Service(Deps d)
     DownloadManager::cleanPartials(deps.dataDir.getChildFile("tone3000").getChildFile(".partial"));
     providerIndex.load();
     downloads.onEvent = [this](const JobEvent& e) { onJobEvent(e); }; // message thread, never after destruction
+    // The header value only (never a token or a URL with credentials); any thread.
+    client.onDeprecation = [](const juce::String& value)
+    { juce::Logger::writeToLog("TONE3000 API deprecation: " + value); };
 
     // Tokens gone for good (refresh refused) on any thread. signOutQuietly() emits its own status for the sign-out it
     // causes, so the synchronous callback from its auth.clear() is skipped.
@@ -99,7 +102,10 @@ Tone3000Service::~Tone3000Service()
 {
     alive->store(false); // results still on their way are dropped
     cancelDownloads();
-    pool.removeAllJobs(true, -1); // jobs use the units below; requests time out on their own
+    // Memory safety: jobs use the units below, so this waits for them (and `downloads` waits for its workers when it
+    // is destroyed). A request JUCE cannot interrupt ends by its idle timeout: 15 s for JSON
+    // (Tone3000Client::jsonTimeoutMs), 20 s for a transfer (fetchTimeoutMs), so the wait is bounded at about 20 s.
+    pool.removeAllJobs(true, -1);
 }
 
 template <typename Work, typename Done>
@@ -514,7 +520,7 @@ void Tone3000Service::cancelDownloads()
 {
     for (auto& job : instantJobs)
         job.second = true;
-    downloads.cancelAll();
+    downloads.requestCancelAll(); // never blocks the message thread on a stalled connection
 }
 
 void Tone3000Service::emitJob(const JobEvent& e, const juce::File& placed, const juce::String& sha)

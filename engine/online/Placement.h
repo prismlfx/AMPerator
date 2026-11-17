@@ -9,8 +9,9 @@
 
 namespace amp::online
 {
-// "" when the file is acceptable. format "nam": a JSON object with a string "version"; anything else ("ir"): a WAV or
-// AIFF that opens with at least one channel and one sample (read through a reader, never loaded whole).
+// "" when the file is acceptable. format "nam": a JSON object with a string "version"; anything else ("ir"): a WAV
+// (not AIFF: the file is always named .wav) that opens with at least one channel and one sample (read through a
+// reader, never loaded whole).
 // Otherwise "not a valid <format> file".
 juce::String validateAssetFile(const juce::File&, const juce::String& format);
 

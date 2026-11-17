@@ -107,7 +107,8 @@ public:
     juce::String download(DownloadRequest, juce::String& error);
     // Unknown or finished job: no-op; otherwise one failed "canceled" event.
     void cancel(const juce::String& jobId);
-    // Every running job ends "canceled" (blocks until the workers have stopped).
+    // Every running job ends "canceled", asynchronously; returns at once (disconnect, quit). The destructor is the
+    // only place that waits for workers.
     void cancelDownloads();
 
     const ProviderIndex& index() const { return providerIndex; }

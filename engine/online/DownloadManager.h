@@ -61,7 +61,10 @@ public:
 
     juce::String start(DownloadRequest); // returns the jobId (assigned when empty); Queued is emitted asynchronously
     void cancel(const juce::String& jobId); // unknown or finished job: no-op; otherwise one Failed "canceled"
-    void cancelAll();                        // blocks until the workers have stopped
+    void cancelAll();                        // blocks until the workers have stopped (destructor use)
+    // Flags every running job and returns at once; each ends with one Failed "canceled" when its worker notices (a
+    // Done that arrives after this is turned into "canceled" on delivery).
+    void requestCancelAll();
 
     static void cleanPartials(const juce::File& partialDir);
 

@@ -16,6 +16,20 @@ const char* const fileIdHeader = "X-Fake-File-Id";
 std::mutex fileLock;
 std::map<juce::int64, juce::MemoryBlock> fileRegistry;
 juce::int64 nextFileId = 1;
+int liveInstances = 0; // guarded by fileLock
+}
+
+FakeHttp::FakeHttp()
+{
+    std::lock_guard<std::mutex> guard(fileLock);
+    ++liveInstances;
+}
+
+FakeHttp::~FakeHttp()
+{
+    std::lock_guard<std::mutex> guard(fileLock);
+    if (--liveInstances == 0)
+        fileRegistry.clear(); // otherwise JUCE's leak detector reports the blocks at exit
 }
 
 std::vector<HttpRequest> FakeHttp::snapshot() const
@@ -64,7 +78,7 @@ HttpResponse FakeHttp::request(const HttpRequest& req)
             std::lock_guard<std::mutex> guard(fileLock);
             auto it = fileRegistry.find(id.getLargeIntValue());
             if (it != fileRegistry.end())
-                bytes = it->second; // kept: a captured response may be served more than once (tiny test leak)
+                bytes = it->second; // kept: a captured response may be served more than once
         }
         auto stripped = juce::StringPairArray();
         for (int i = 0; i < response.headers.size(); ++i)

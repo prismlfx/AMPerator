@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <juce_audio_formats/juce_audio_formats.h>
+
 #include "assets/AssetIndex.h"
 #include "online/Placement.h"
 
@@ -161,6 +163,25 @@ TEST_CASE("online_placement: validateAssetFile accepts real assets and rejects m
     auto empty = t.dir.getChildFile("empty.wav");
     empty.replaceWithText("");
     CHECK(validateAssetFile(empty, "ir") == "not a valid ir file");
+}
+
+TEST_CASE("online_placement: an AIFF body is not a valid IR (the file is always named .wav)", "[online]")
+{
+    TempDir t;
+    auto aiff = t.dir.getChildFile("ir.part");
+    {
+        juce::AiffAudioFormat format;
+        std::unique_ptr<juce::OutputStream> out = std::make_unique<juce::FileOutputStream>(aiff);
+        auto writer = format.createWriterFor(
+            out, juce::AudioFormatWriterOptions().withSampleRate(48000.0).withNumChannels(1).withBitsPerSample(16));
+        REQUIRE(writer != nullptr);
+        juce::AudioBuffer<float> buffer(1, 64);
+        buffer.clear();
+        buffer.setSample(0, 0, 0.5f);
+        REQUIRE(writer->writeFromAudioSampleBuffer(buffer, 0, 64));
+    }
+    REQUIRE(aiff.getSize() > 0);
+    CHECK(validateAssetFile(aiff, "ir") == "not a valid ir file");
 }
 
 TEST_CASE("online_placement: hostile names stay inside the TONE3000 folder", "[online]")

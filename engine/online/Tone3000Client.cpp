@@ -1,5 +1,7 @@
 #include "Tone3000Client.h"
 
+#include "JuceHttpTransport.h"
+
 namespace amp::online
 {
 namespace
@@ -26,18 +28,6 @@ juce::var dataArray(const juce::var& v)
     if (v.isArray())
         return v;
     return v.getProperty("data", {});
-}
-
-int effectivePort(const juce::URL& u)
-{
-    return u.getPort() > 0 ? u.getPort() : (u.getScheme().equalsIgnoreCase("https") ? 443 : 80);
-}
-
-// The token goes only to the configured origin: same scheme (never cleartext http), host and port.
-bool sameOrigin(const juce::URL& a, const juce::URL& b)
-{
-    return a.getScheme().equalsIgnoreCase(b.getScheme()) && a.getDomain().equalsIgnoreCase(b.getDomain())
-           && effectivePort(a) == effectivePort(b);
 }
 
 juce::String escaped(const juce::String& s) { return juce::URL::addEscapeChars(s, true); }
@@ -85,6 +75,11 @@ Tone3000Client::Reply Tone3000Client::send(HttpRequest req, bool authorize)
             retried = true; // one forced refresh and one retry, never more
             continue;
         }
+        else if (r.status == 401 && authorize) // refused even with a fresh token: the session is over (spec 11)
+        {
+            auth.clear(); // fires onSignedOut
+            reply.error = makeError(ClientError::Kind::NotConnected, "not connected");
+        }
         else if (r.status == 429)
             reply.error = makeError(ClientError::Kind::RateLimited, "rate limited",
                                     juce::jmax(0, r.header("Retry-After").getIntValue()));
@@ -98,11 +93,13 @@ Tone3000Client::Reply Tone3000Client::send(HttpRequest req, bool authorize)
     }
 }
 
-Tone3000Client::Reply Tone3000Client::getJson(const juce::String& path, juce::var& parsed)
+Tone3000Client::Reply Tone3000Client::getJson(const juce::String& path, juce::var& parsed, std::function<bool()> cancel)
 {
     HttpRequest req;
     req.url = apiUrl(path);
     req.headers.set("Accept", "application/json");
+    req.timeoutMs = jsonTimeoutMs;
+    req.shouldCancel = std::move(cancel);
 
     auto reply = send(std::move(req), true);
     if (reply.error)
@@ -154,11 +151,11 @@ Result<Page> Tone3000Client::list(const juce::String& kind, int page)
     return out;
 }
 
-Result<Tone> Tone3000Client::tone(const juce::String& id)
+Result<Tone> Tone3000Client::tone(const juce::String& id, std::function<bool()> cancel)
 {
     Result<Tone> out;
     juce::var json;
-    out.error = getJson("/tones/" + escaped(id), json).error;
+    out.error = getJson("/tones/" + escaped(id), json, cancel).error;
     if (out.error)
         return out;
 
@@ -179,7 +176,7 @@ Result<Tone> Tone3000Client::tone(const juce::String& id)
     for (const auto& query : queries)
     {
         juce::var models;
-        out.error = getJson(query, models).error;
+        out.error = getJson(query, models, cancel).error;
         if (out.error)
             return out;
 
@@ -202,11 +199,11 @@ Result<Tone> Tone3000Client::tone(const juce::String& id)
     return out;
 }
 
-Result<ModelInfo> Tone3000Client::model(const juce::String& id)
+Result<ModelInfo> Tone3000Client::model(const juce::String& id, std::function<bool()> cancel)
 {
     Result<ModelInfo> out;
     juce::var json;
-    out.error = getJson("/models/" + escaped(id), json).error;
+    out.error = getJson("/models/" + escaped(id), json, std::move(cancel)).error;
     if (! out.error)
         out.value = parseModel(unwrap(json));
     return out;
@@ -215,17 +212,24 @@ Result<ModelInfo> Tone3000Client::model(const juce::String& id)
 ClientError Tone3000Client::fetch(const juce::String& url, const juce::File& to,
                                   std::function<void(juce::int64, juce::int64)> progress, std::function<bool()> cancel)
 {
+    // The URL comes from the API (model_url, images[0]). One parser, the transport's, decides where it goes: a URL it
+    // would refuse, or cleartext http when the base is https, is not fetched at all.
+    const auto target = http::originOf(url), ours = http::originOf(base);
+    if (! target.valid() || ! http::hasPlainAuthority(url))
+        return makeError(ClientError::Kind::Http, "unsupported URL");
+    if (target.scheme != "https" && ours.scheme != "http")
+        return makeError(ClientError::Kind::Http, "refused insecure URL");
+
     HttpRequest req;
     req.url = url;
     req.toFile = to;
     req.onProgress = std::move(progress);
     req.shouldCancel = std::move(cancel);
     req.headers.set("Accept", "*/*");
-    req.timeoutMs = 120000;
+    req.timeoutMs = fetchTimeoutMs;
 
-    // Never leak the token to another host.
-    const bool ours = sameOrigin(juce::URL(url), juce::URL(base));
-    auto reply = send(std::move(req), ours);
+    // Never leak the token to another origin (scheme, host and port).
+    auto reply = send(std::move(req), ours.valid() && target == ours);
 
     if (reply.error && reply.response.status != 0)
         to.deleteFile(); // an error body is not a model

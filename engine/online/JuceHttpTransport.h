@@ -1,7 +1,8 @@
 #pragma once
 
 // The real HttpTransport over juce::URL (NSURLSession on macOS). Stateless and thread-safe. Redirects are followed
-// here, not by JUCE, so an Authorization header can never reach another origin.
+// here, not by JUCE, so an Authorization header can never reach another origin. Every request carries
+// "Cache-Control: no-store" unless it sets its own.
 
 #include "HttpTransport.h"
 
@@ -35,6 +36,10 @@ struct Origin
 };
 
 Origin originOf(const juce::String& url);
+
+// Whether the URL parses and its authority has no userinfo, backslash or control characters (the same rule as for
+// redirect targets). A URL failing it is refused before any connection, and never gets a token.
+bool hasPlainAuthority(const juce::String& url);
 
 // Resolves a Location header against the URL that answered. Absolute, protocol-relative ("//host/x"), absolute-path,
 // relative and query-only references are handled; the fragment is dropped. Empty when it cannot be resolved.

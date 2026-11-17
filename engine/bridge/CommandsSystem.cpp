@@ -199,7 +199,7 @@ CommandResult Engine::setSettings(const SettingsPatch& p)
     if (p.tone3000AutoFetch)
         settings.tone3000AutoFetch = *p.tone3000AutoFetch;
     if (p.tone3000ClientId)
-        settings.tone3000ClientId = *p.tone3000ClientId; // the online service (a later task) reads it when it starts
+        settings.tone3000ClientId = *p.tone3000ClientId; // the online service reads it at the next launch
     saveSettings();
     pollStatus();
 

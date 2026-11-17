@@ -54,21 +54,16 @@ juce::String validateAssetFile(const juce::File& file, const juce::String& forma
                                                                                                 : invalid;
     }
 
-    for (int i = 0; i < 2; ++i)
-    {
-        auto stream = std::make_unique<juce::FileInputStream>(file);
-        if (! stream->openedOk())
-            return invalid;
-        std::unique_ptr<juce::AudioFormat> fmt;
-        if (i == 0)
-            fmt = std::make_unique<juce::WavAudioFormat>();
-        else
-            fmt = std::make_unique<juce::AiffAudioFormat>();
-        // The reader takes the stream when it succeeds; on failure createReaderFor deletes it.
-        std::unique_ptr<juce::AudioFormatReader> reader(fmt->createReaderFor(stream.release(), true));
-        if (reader != nullptr && reader->numChannels >= 1 && reader->lengthInSamples > 0)
-            return {};
-    }
+    // WAV only: the file is always placed as ".wav" and JUCE picks the reader by extension, so an AIFF body would
+    // never load.
+    auto stream = std::make_unique<juce::FileInputStream>(file);
+    if (! stream->openedOk())
+        return invalid;
+    juce::WavAudioFormat wav;
+    // The reader takes the stream when it succeeds; on failure createReaderFor deletes it.
+    std::unique_ptr<juce::AudioFormatReader> reader(wav.createReaderFor(stream.release(), true));
+    if (reader != nullptr && reader->numChannels >= 1 && reader->lengthInSamples > 0)
+        return {};
     return invalid;
 }
 

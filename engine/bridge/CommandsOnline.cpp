@@ -23,12 +23,19 @@ CommandResult Engine::tone3000Connect()
 }
 
 CommandResult Engine::tone3000Browse(const juce::String& format, const juce::String& nodeId,
-                                     const juce::String& loadTone)
+                                     const juce::String& loadTone, bool replace)
 {
     if (tone3000 == nullptr)
         return CommandResult::failure("not configured");
+    auto tone = loadTone;
+    if (replace && tone.isEmpty() && nodeId.isNotEmpty()) // "Replace from TONE3000…": reopen the node's own tone
+        if (const auto* node = findDocNode(nodeId); node != nullptr && node->asset && node->asset->source
+                                                     && node->asset->source->provider == "tone3000")
+            if (const auto sha = tone3000->index().shaForModel(node->asset->source->id))
+                if (const auto p = tone3000->index().bySha(*sha))
+                    tone = p->toneId;
     tone3000->openAuthWindow = onOpenAuthWindow;
-    tone3000->browse({ format, nodeId, loadTone }, bridge().deferReply());
+    tone3000->browse({ format, nodeId, tone }, bridge().deferReply());
     return CommandResult::deferred();
 }
 
@@ -161,8 +168,9 @@ CommandResult Engine::placeDownload(const juce::File& file, const juce::String& 
     const auto fits = format == "nam" ? NodeType::NamAmp : NodeType::CabIR;
     auto mismatch = [&](NodeType type)
     {
-        return CommandResult::failure("that tone is a " + format + " file and cannot be used on a "
-                                      + json::nodeTypeName(type) + " node");
+        return CommandResult::failure((format == "nam" ? juce::String("that tone is a NAM file")
+                                                       : juce::String("that tone is an IR file"))
+                                      + " and cannot be used on a " + json::nodeTypeName(type) + " node");
     };
 
     if (request.nodeId.isNotEmpty())

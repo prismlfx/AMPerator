@@ -99,7 +99,7 @@ public:
         bool deferAudioStart = false;
         /** How deleteRig disposes of rig files; null = the system trash (juce::File::moveToTrash). */
         std::function<bool(const juce::File&)> trashFile;
-        /** TONE3000 network access; null = no network yet (every request fails "network transport not available"). */
+        /** TONE3000 network access; null = the real transport (online::JuceHttpTransport) when a client id is set. */
         std::unique_ptr<online::HttpTransport> httpTransport;
         /** Where TONE3000 tokens live; null = the platform store (Keychain service "com.amperator.tone3000"). */
         std::unique_ptr<online::SecureStore> secureStore;
@@ -221,8 +221,11 @@ public:
     CommandResult tone3000Connect();
     CommandResult tone3000Disconnect(); // {}
     /** Deferred: TONE3000's picker (format "nam" | "ir" | "" = any; loadTone non-empty = prompt=load_tone for that
-        tone); signs in first when not connected. {toneId, nodeId?} (nodeId echoed when given) or {canceled: true}. */
-    CommandResult tone3000Browse(const juce::String& format, const juce::String& nodeId, const juce::String& loadTone);
+        tone); signs in first when not connected. {toneId, nodeId?} (nodeId echoed when given) or {canceled: true}.
+        replace (with nodeId, without loadTone): the tone of the node's TONE3000 model, looked up in the provenance
+        index by model id (records outlive the file), opens as load_tone; an unknown one gets the plain picker. */
+    CommandResult tone3000Browse(const juce::String& format, const juce::String& nodeId, const juce::String& loadTone,
+                                 bool replace = false);
     /** Deferred: {tones: [ToneSummary], page, totalPages};
         kind = favorited | downloaded | created | trending | latest. */
     CommandResult tone3000List(const juce::String& kind, int page);

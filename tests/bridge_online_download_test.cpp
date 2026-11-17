@@ -297,7 +297,7 @@ TEST_CASE("bridge_online_download: a download of the wrong format stays in the l
     REQUIRE(f.waitJob(job)["state"].toString() == "done");
     CHECK(f.irFile().existsAsFile());
     CHECK(f.state()["rig"]["nodes"].size() == 5);
-    CHECK(f.lastEvent("error")["message"].toString() == "that tone is a ir file and cannot be used on a NamAmp node");
+    CHECK(f.lastEvent("error")["message"].toString() == "that tone is an IR file and cannot be used on a NamAmp node");
     CHECK(f.lastEvent("error")["context"].toString() == "tone3000");
 
     // Same check for a node target.
@@ -588,4 +588,122 @@ TEST_CASE("bridge_online_download: a download for a removed node leaves the rig 
     CHECK(f.events("rigLoaded").size() == loaded);
     CHECK(f.namFile().existsAsFile());
     CHECK(f.events("error").empty());
+}
+
+TEST_CASE("bridge_online_download: the error for a NAM file on a cab node names the format")
+{
+    DownloadFixture f;
+    f.serveModels();
+    const auto job = f.download(obj({ { "modelId", "m_123" }, { "addNode", obj({ { "type", "CabIR" }, { "index", 2 } }) } }));
+    REQUIRE(f.waitJob(job)["state"].toString() == "done");
+    CHECK(f.lastEvent("error")["message"].toString() == "that tone is a NAM file and cannot be used on a CabIR node");
+}
+
+TEST_CASE("bridge_online_download: a 429 job says how long to wait")
+{
+    DownloadFixture f;
+    juce::StringPairArray headers;
+    headers.set("Retry-After", "30");
+    f.http->on("GET", api + "/models/m_123", [headers](const HttpRequest&) { return FakeHttp::json(429, "{}", headers); });
+    const auto e = f.waitJob(f.download(obj({ { "modelId", "m_123" } })));
+    CHECK(e["state"].toString() == "failed");
+    CHECK(e["error"].toString() == "TONE3000 rate limit; try again in 30 s");
+}
+
+TEST_CASE("bridge_online_download: tone3000Disconnect during a stalled download replies at once")
+{
+    DownloadFixture f;
+    std::atomic<bool> inFetch { false }, release { false }, handlerDone { false };
+    f.http->on("GET", api + "/models/m_123/download", [&](const HttpRequest&)
+               {
+                   inFetch = true;
+                   const auto deadline = juce::Time::getMillisecondCounter() + 5000;
+                   while (! release.load() && juce::Time::getMillisecondCounter() < deadline) // a dead connection
+                       juce::Thread::sleep(5);
+                   handlerDone = true;
+                   return FakeHttp::file(200, assetBytes("tiny.nam"));
+               });
+    f.serveModels();
+    const auto job = f.download(obj({ { "modelId", "m_123" } }));
+    const auto deadline = juce::Time::getMillisecondCounter() + 5000;
+    while (! inFetch.load() && juce::Time::getMillisecondCounter() < deadline)
+        f.pump(10);
+    REQUIRE(inFetch.load());
+
+    f.ok("tone3000Disconnect");
+    CHECK_FALSE(handlerDone.load()); // the reply did not wait for the network
+    release = true;
+    const auto e = f.waitJob(job);
+    CHECK(e["state"].toString() == "failed");
+    CHECK(e["error"].toString() == "canceled");
+    CHECK_FALSE(f.namFile().exists());
+}
+
+TEST_CASE("bridge_online_download: the token never follows a model or image URL off the origin")
+{
+    DownloadFixture f;
+    const juce::String hostile[] = { "https://www.tone3000.com:443@evil.example/x", "https://user:pass@www.tone3000.com/x",
+                                     "http://www.tone3000.com/x" };
+    f.serveModels();
+    juce::StringArray models;
+    for (const auto& url : hostile)
+        for (const bool asModel : { true, false })
+        {
+            const auto model = "m_h" + juce::String(models.size()), tone = "t_h" + juce::String(models.size());
+            models.add(model);
+            const auto modelUrl = asModel ? url : api + "/models/m_123/download";
+            f.http->on("GET", api + "/models/" + model, [model, tone, modelUrl](const HttpRequest&)
+                       {
+                           return FakeHttp::json(200, R"({"id":")" + model + R"(","tone_id":")" + tone
+                                                          + R"(","name":"H","model_url":")" + modelUrl + R"("})");
+                       });
+            f.http->on("GET", api + "/tones/" + tone, [tone, url](const HttpRequest&)
+                       {
+                           return FakeHttp::json(200, R"({"id":")" + tone + R"(","title":"H","platform":"nam",)"
+                                                          + R"("user":{"username":"jane"},"images":[")" + url + R"("]})");
+                       });
+            f.http->on("GET", api + "/models?tone_id=" + tone,
+                       [](const HttpRequest&) { return FakeHttp::json(200, R"({"data":[]})"); });
+        }
+    f.http->on("GET", "", [](const HttpRequest&) { return FakeHttp::file(200, assetBytes("tiny.nam")); }); // anything else
+    for (const auto& model : models)
+        f.waitJob(f.download(obj({ { "modelId", model } })));
+
+    for (const auto& r : f.http->snapshot())
+        if (! r.url.startsWith(api))
+        {
+            INFO(r.url);
+            CHECK(r.headers["Authorization"].isEmpty());
+        }
+}
+
+TEST_CASE("bridge_online_download: Replace resolves the node's tone from the provenance index")
+{
+    DownloadFixture f;
+    f.serveModels();
+    REQUIRE(f.waitJob(f.download(obj({ { "modelId", "m_123" } })))["state"].toString() == "done");
+    REQUIRE(f.namFile().deleteFile()); // the record outlives the file
+    f.writeFetchRig(sha("tiny.nam"));
+    f.ok("loadRig", obj({ { "id", fetchRigId } }));
+
+    const int opened = f.window.opened;
+    const int id = f.post("tone3000Browse", obj({ { "format", "nam" }, { "nodeId", "n3" }, { "replace", true } }));
+    REQUIRE(f.window.opened == opened + 1);
+    CHECK(f.urlParam("prompt") == "load_tone");
+    CHECK(f.urlParam("tone_id") == "t_456");
+    f.window.done("tone_id=t_456&state=" + f.urlParam("state"));
+    CHECK(f.waitReply(id)["result"]["nodeId"].toString() == "n3");
+
+    // A node without a known TONE3000 source gets the plain picker.
+    const int other = f.post("tone3000Browse", obj({ { "format", "ir" }, { "nodeId", "n5" }, { "replace", true } }));
+    CHECK(f.urlParam("prompt") == "select_tone");
+    CHECK_FALSE(f.window.url.contains("tone_id="));
+    f.window.done("");
+    f.waitReply(other);
+
+    // Without replace, a node id alone never turns into load_tone.
+    const int plain = f.post("tone3000Browse", obj({ { "format", "nam" }, { "nodeId", "n3" } }));
+    CHECK(f.urlParam("prompt") == "select_tone");
+    f.window.done("");
+    f.waitReply(plain);
 }

@@ -260,7 +260,8 @@ const std::map<juce::String, Handler>& commands()
               const auto format = optStr(a, "format").value_or("");
               if (format.isNotEmpty() && format != "nam" && format != "ir")
                   throw ArgError("argument \"format\" must be \"nam\" or \"ir\"");
-              return e.tone3000Browse(format, optStr(a, "nodeId").value_or(""), optStr(a, "loadTone").value_or(""));
+              return e.tone3000Browse(format, optStr(a, "nodeId").value_or(""), optStr(a, "loadTone").value_or(""),
+                                      a.hasProperty("replace") && boolean(a, "replace"));
           } },
         { "tone3000List", [](Engine& e, const juce::var& a)
           {

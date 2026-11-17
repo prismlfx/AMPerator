@@ -119,6 +119,12 @@ Origin originOf(const juce::String& url)
     return o;
 }
 
+bool hasPlainAuthority(const juce::String& url)
+{
+    const auto p = split(url);
+    return p.valid && authorityIsPlain(p.authority);
+}
+
 juce::String resolveRedirect(const juce::String& currentUrl, const juce::String& locationIn)
 {
     const auto location = locationIn.trim();
@@ -235,6 +241,8 @@ juce::String headerBlock(const HttpRequest& req, bool sendAuthorization)
             continue;
         block << name << ": " << value << "\r\n";
     }
+    if (! req.headers.getAllKeys().contains("Cache-Control", true))
+        block << "Cache-Control: no-store\r\n"; // nothing of ours belongs in a URL cache
     return block;
 }
 
@@ -275,7 +283,8 @@ bool readCapped(juce::InputStream& in, juce::int64 limit, const HttpRequest& req
 HttpResponse JuceHttpTransport::request(const HttpRequest& req)
 {
     HttpResponse res;
-    if (http::originOf(req.url).valid() == false)
+    // The first hop gets the same check as a redirect target: userinfo could make JUCE connect to another host.
+    if (! http::originOf(req.url).valid() || ! http::hasPlainAuthority(req.url))
         return failure(res, "unsupported URL");
 
     auto method = req.method.isEmpty() ? juce::String("GET") : req.method.toUpperCase();

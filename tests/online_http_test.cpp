@@ -372,3 +372,30 @@ TEST_CASE("online_http: a streamed 200 to toFile writes every byte and reports p
     for (size_t i = 0; i < bytes.getSize(); ++i)
         REQUIRE(bytes[i] == 'a');
 }
+
+TEST_CASE("online_http: a first-hop URL with userinfo, a backslash or control characters is refused before connecting")
+{
+    LoopbackHttpServer a;
+    a.on("/x", ok());
+    const auto hostPort = "127.0.0.1:" + juce::String(a.port());
+    for (const auto& url : { "http://user:pass@" + hostPort + "/x", "http://" + hostPort + "@" + hostPort + "/x",
+                             "http://" + hostPort + "\\@" + hostPort + "/x", "http://127.0.0.1\t:" + juce::String(a.port()) + "/x" })
+    {
+        auto res = JuceHttpTransport().request(authed(url));
+        INFO(url);
+        REQUIRE(res.status == 0);
+        REQUIRE(res.error == "unsupported URL");
+    }
+    REQUIRE(a.requests().empty());
+    REQUIRE_FALSE(http::hasPlainAuthority("https://www.tone3000.com:443@evil.example/x"));
+    REQUIRE(http::hasPlainAuthority("https://www.tone3000.com:443/x"));
+}
+
+TEST_CASE("online_http: requests ask caches not to store them")
+{
+    LoopbackHttpServer a;
+    a.on("/x", ok());
+    REQUIRE(JuceHttpTransport().request(authed(a.url("/x"))).ok());
+    REQUIRE(a.requestsFor("/x").size() == 1);
+    REQUIRE(a.requestsFor("/x")[0].headers.getValue("Cache-Control", {}) == "no-store");
+}

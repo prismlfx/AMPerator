@@ -353,3 +353,67 @@ TEST_CASE("online_download: cleanPartials removes leftovers")
     DownloadManager::cleanPartials(dir.getChildFile("missing")); // no throw
     dir.deleteRecursively();
 }
+
+TEST_CASE("online_download: a 429 fails the job with the rate-limit wait")
+{
+    DownloadFixture f;
+    juce::StringPairArray headers;
+    headers.set("Retry-After", "9");
+    f.http.on("GET", api + "/models/m_123", [headers](const HttpRequest&) { return FakeHttp::json(429, "{}", headers); });
+    f.manager->start(DownloadRequest { {}, "m_123", {}, {}, {}, {} });
+    REQUIRE(f.pumpUntil([&] { return f.finished(); }));
+    REQUIRE(f.events.back().state == JobState::Failed);
+    REQUIRE(f.events.back().error == "TONE3000 rate limit; try again in 9 s");
+}
+
+TEST_CASE("online_download: a cancel stops a job waiting on its metadata request")
+{
+    DownloadFixture f;
+    std::atomic<bool> waiting { false }, sawCancel { false };
+    f.http.on("GET", api + "/models/m_123", [&](const HttpRequest& r) {
+        waiting = true;
+        const auto deadline = juce::Time::getMillisecondCounter() + 5000;
+        while (juce::Time::getMillisecondCounter() < deadline)
+        {
+            if (r.shouldCancel && r.shouldCancel())
+            {
+                sawCancel = true;
+                HttpResponse out;
+                out.error = "canceled";
+                return out;
+            }
+            juce::Thread::sleep(5);
+        }
+        return FakeHttp::json(200, fixture("model.json"));
+    });
+    const auto id = f.manager->start(DownloadRequest { {}, "m_123", {}, {}, {}, {} });
+    REQUIRE(f.pumpUntil([&] { return waiting.load(); }));
+    f.manager->cancel(id);
+    REQUIRE(f.pumpUntil([&] { return f.finished(); }));
+    REQUIRE(sawCancel.load());
+    REQUIRE(f.events.back().error == "canceled");
+}
+
+TEST_CASE("online_download: requestCancelAll returns at once and the jobs still end canceled")
+{
+    DownloadFixture f;
+    std::atomic<bool> inFetch { false }, release { false }, handlerDone { false };
+    f.http.on("GET", api + "/models/m_123/download", [&](const HttpRequest&) {
+        inFetch = true;
+        const auto deadline = juce::Time::getMillisecondCounter() + 5000;
+        while (! release.load() && juce::Time::getMillisecondCounter() < deadline) // ignores the cancel flag
+            juce::Thread::sleep(5);
+        handlerDone = true;
+        return FakeHttp::file(200, assetBytes("tiny.nam"));
+    });
+    f.serveMetadata();
+    f.manager->start(DownloadRequest { "a", "m_123", {}, {}, {}, {} });
+    REQUIRE(f.pumpUntil([&] { return inFetch.load(); }));
+    f.manager->requestCancelAll();
+    REQUIRE_FALSE(handlerDone.load()); // did not wait for the stalled transfer
+    release = true;
+    REQUIRE(f.pumpUntil([&] { return f.finished(); }));
+    REQUIRE(f.events.back().state == JobState::Failed);
+    REQUIRE(f.events.back().error == "canceled");
+    REQUIRE(! f.partialDir.getChildFile("a").exists());
+}
