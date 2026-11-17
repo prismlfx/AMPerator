@@ -1,6 +1,7 @@
 #pragma once
 
-// The TONE3000 facade the Engine calls (tone-library spec section 5.1): connection status, connect and disconnect.
+// The TONE3000 facade the Engine calls (tone-library spec section 5.1): connection status, connect / disconnect, the
+// picker (browse), bounded lists and tone detail.
 // Owns the auth, client, download manager, provenance index and a small pool for blocking calls; turns their results
 // into bridge events. Message thread only at its public surface; worker results come back through callAsync, guarded
 // so nothing reaches a destroyed service.
@@ -53,24 +54,44 @@ public:
         AssetIndex& assets;
     };
 
+    // What tone3000Browse asked for: format "nam" | "ir" | "" (any); nodeId is echoed in the reply; a non-empty
+    // loadTone opens prompt=load_tone for that tone instead of the select_tone picker.
+    struct BrowseRequest
+    {
+        juce::String format, nodeId, loadTone;
+    };
+
+    using Reply = std::function<void(CommandResult)>;
+
     static constexpr const char* redirectPrefix = "http://127.0.0.1/callback";
 
     explicit Tone3000Service(Deps);
     ~Tone3000Service(); // cancels downloads, waits for the pool
 
     std::function<void(const juce::String& name, const juce::var& data)> emit; // bridge events
-    // Opens the sign-in window; done(query) with the redirect's query, done("") when the user closed it.
-    // Null = "not available".
+    // Opens the sign-in window; done(query) with the redirect's query, done("") when the user closed it. done must be
+    // called exactly once (later calls are ignored). Null or throwing = "not available".
     std::function<void(const juce::String& url, const juce::String& redirectPrefix,
                        std::function<void(const juce::String& query)> done)>
         openAuthWindow;
     std::function<void()> clearCookies;
 
+    // All of these are message-thread calls. Every `reply` is called exactly once, possibly before returning.
+
     Tone3000Status status() const;
     // Opens the sign-in window and replies once it is done: {connected: true, user} or {canceled: true}, or a failure
-    // ("busy", "not available", the sign-in error). May reply before returning.
-    void connect(std::function<void(CommandResult)> reply);
-    // Cancels downloads, removes the tokens, forgets the user, clears the window's cookies; emits tone3000Status.
+    // ("busy", "not available", the sign-in error).
+    void connect(Reply reply);
+    // Opens TONE3000's picker (signing in first, in a window of its own, when not connected) and replies
+    // {toneId, nodeId?} or {canceled: true}, or a failure as connect.
+    void browse(const BrowseRequest&, Reply reply);
+    // {tones: [ToneSummary], page, totalPages}; kind is one of the client's five lists.
+    // "not connected" when signed out.
+    void list(const juce::String& kind, int page, Reply reply);
+    // Tone (with its A2 then A1 models). "not connected" when signed out. Nothing is cached.
+    void tone(const juce::String& id, Reply reply);
+    // Cancels downloads, abandons a sign-in or picker window still open (its late callback replies {canceled: true}),
+    // removes the tokens, forgets the user, clears the window's cookies; emits tone3000Status.
     void disconnect();
 
     const ProviderIndex& index() const { return providerIndex; }
@@ -78,14 +99,32 @@ public:
 private:
     using Alive = std::shared_ptr<std::atomic<bool>>;
 
+    // One sign-in / picker command while its window(s) are open. Abandoned by disconnect(): it then only replies
+    // {canceled: true} and no longer owns `busy`.
+    struct Flow
+    {
+        Reply reply;
+        bool abandoned = false, replied = false;
+    };
+    using FlowPtr = std::shared_ptr<Flow>;
+
     // Runs work() on the pool and then done(result) on the message thread, unless the service is gone by then.
     template <typename Work, typename Done>
     void inBackground(Work work, Done done);
 
-    void finishConnect(const juce::String& query, std::function<void(CommandResult)> reply);
-    void signedIn(std::function<void(CommandResult)> reply);
+    FlowPtr beginFlow(Reply); // null (after replying) when busy or without a window hook
+    void finish(const FlowPtr&, CommandResult);
+    void openWindow(const FlowPtr&, const juce::String& url, std::function<void(const juce::String&)> onQuery);
+    // Exchanges a sign-in callback; signedIn() runs (message thread) once the tokens are stored.
+    void signIn(const FlowPtr&, const juce::String& query, std::function<void()> signedIn);
+    void openPicker(const FlowPtr&, const BrowseRequest&);
+    void pickerDone(const FlowPtr&, const BrowseRequest&, const juce::String& query);
+    void stateMismatch(const FlowPtr&);
+    void signOutQuietly(); // removes the tokens without the onSignedOut status event (the caller emits)
     void loadUser();
     void emitStatus();
+    template <typename T>
+    void replyWith(Result<T>, Reply, std::function<juce::var(const T&)> shape);
 
     const Deps deps;
     const Alive alive = std::make_shared<std::atomic<bool>>(true);
@@ -96,7 +135,9 @@ private:
     DownloadManager downloads;
 
     bool busy = false;
-    bool clearing = false; // disconnect() is running auth.clear() (its own status event covers the sign-out)
+    bool connected = false; // cached: the store is read at construction only
+    bool clearing = false;  // signOutQuietly() is running auth.clear()
+    FlowPtr flow;           // the open window flow, if any
     std::optional<UserRef> user;
 
     juce::ThreadPool pool { 2 }; // last member: destroyed (joined) first

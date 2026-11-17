@@ -1,5 +1,7 @@
 #include "Tone3000Service.h"
 
+#include <stdexcept>
+
 #include <juce_events/juce_events.h>
 
 #include "Engine.h"
@@ -26,6 +28,8 @@ juce::var object(std::initializer_list<std::pair<const char*, juce::var>> props)
         o->setProperty(k, v);
     return juce::var(o);
 }
+
+juce::var canceledResult() { return object({ { "canceled", true } }); }
 
 AuthConfig authConfig(const juce::String& clientId)
 {
@@ -61,7 +65,7 @@ Tone3000Service::Tone3000Service(Deps d)
     DownloadManager::cleanPartials(deps.dataDir.getChildFile("tone3000").getChildFile(".partial"));
     providerIndex.load();
 
-    // Tokens gone for good (refresh refused) on any thread. disconnect() emits its own status for the sign-out it
+    // Tokens gone for good (refresh refused) on any thread. signOutQuietly() emits its own status for the sign-out it
     // causes, so the synchronous callback from its auth.clear() is skipped.
     auth.onSignedOut = [this, aliveFlag = alive]
     {
@@ -71,12 +75,15 @@ Tone3000Service::Tone3000Service(Deps d)
                                         {
                                             if (! aliveFlag->load())
                                                 return;
-                                            user.reset();
+                                            connected = auth.isConnected(); // a newer sign-in may have won
+                                            if (! connected)
+                                                user.reset();
                                             emitStatus();
                                         });
     };
 
-    if (auth.isConnected())
+    connected = auth.isConnected();
+    if (connected)
         loadUser();
 }
 
@@ -105,12 +112,13 @@ void Tone3000Service::inBackground(Work work, Done done)
 
 Tone3000Status Tone3000Service::status() const
 {
+    JUCE_ASSERT_MESSAGE_THREAD
     Tone3000Status s;
     s.configured = true;
-    s.connected = auth.isConnected();
+    s.connected = connected;
     s.busy = busy;
     s.remembered = store.remembered();
-    if (s.connected)
+    if (connected)
         s.user = user;
     return s;
 }
@@ -121,92 +129,287 @@ void Tone3000Service::emitStatus()
         emit("tone3000Status", status().toVar());
 }
 
-void Tone3000Service::connect(std::function<void(CommandResult)> reply)
+// ---- Window flows (connect, browse) ----
+
+Tone3000Service::FlowPtr Tone3000Service::beginFlow(Reply reply)
 {
     if (busy)
-        return reply(CommandResult::failure("busy"));
+    {
+        reply(CommandResult::failure("busy"));
+        return nullptr;
+    }
     if (! openAuthWindow)
-        return reply(CommandResult::failure("not available"));
-
+    {
+        reply(CommandResult::failure("not available"));
+        return nullptr;
+    }
+    flow = std::make_shared<Flow>();
+    flow->reply = std::move(reply);
     busy = true;
     emitStatus();
-    const auto start = auth.begin();
-    auto called = std::make_shared<bool>(false);
-    // The app calls done on the message thread; only its first call counts.
-    openAuthWindow(start.url, redirectPrefix, [this, aliveFlag = alive, called, reply](const juce::String& query)
-                   {
-                       if (*called || ! aliveFlag->load())
-                           return;
-                       *called = true;
-                       finishConnect(query, reply);
-                   });
+    return flow;
 }
 
-void Tone3000Service::finishConnect(const juce::String& query, std::function<void(CommandResult)> reply)
+void Tone3000Service::finish(const FlowPtr& f, CommandResult r)
 {
-    auto finish = [this, reply](CommandResult r)
+    if (f->replied)
+        return;
+    f->replied = true;
+    if (! f->abandoned) // an abandoned flow no longer owns busy (disconnect cleared it)
     {
+        flow = nullptr;
         busy = false;
         emitStatus();
-        reply(std::move(r));
-    };
+    }
+    f->reply(std::move(r));
+}
 
+void Tone3000Service::openWindow(const FlowPtr& f, const juce::String& url,
+                                 std::function<void(const juce::String&)> onQuery)
+{
+    auto called = std::make_shared<bool>(false);
+    auto done = [this, aliveFlag = alive, f, called, onQuery](const juce::String& query)
+    {
+        JUCE_ASSERT_MESSAGE_THREAD
+        if (*called || ! aliveFlag->load())
+            return;
+        *called = true;
+        if (f->abandoned) // disconnected meanwhile: whatever the window says is dropped
+            return finish(f, CommandResult::success(canceledResult()));
+        onQuery(query);
+    };
+    try
+    {
+        if (! openAuthWindow)
+            throw std::runtime_error("no auth window");
+        openAuthWindow(url, redirectPrefix, done);
+    }
+    catch (...)
+    {
+        *called = true; // a done() the hook may still hold is spent
+        finish(f, CommandResult::failure("not available"));
+    }
+}
+
+void Tone3000Service::stateMismatch(const FlowPtr& f)
+{
+    const juce::String message = "sign-in response didn't match the request";
+    if (emit)
+        emit("error", object({ { "message", message }, { "context", "tone3000" } }));
+    finish(f, CommandResult::failure(message));
+}
+
+void Tone3000Service::signIn(const FlowPtr& f, const juce::String& query, std::function<void()> signedIn)
+{
     if (query.isEmpty()) // the user closed the window
-        return finish(CommandResult::success(object({ { "canceled", true } })));
+        return finish(f, CommandResult::success(canceledResult()));
 
     inBackground([this, query] { return auth.complete(query); },
-                 [this, finish, reply](CallbackResult r)
+                 [this, f, signedIn](CallbackResult r)
                  {
-                     if (! r.stateOk)
+                     if (f->abandoned)
                      {
-                         const juce::String message = "sign-in response didn't match the request";
-                         if (emit)
-                             emit("error", object({ { "message", message }, { "context", "tone3000" } }));
-                         return finish(CommandResult::failure(message));
+                         if (r.signedIn)
+                             signOutQuietly(); // the exchange finished after the disconnect: undo it
+                         return finish(f, CommandResult::success(canceledResult()));
                      }
+                     if (! r.stateOk)
+                         return stateMismatch(f);
                      if (r.error.isNotEmpty())
-                         return finish(CommandResult::failure(r.error));
+                         return finish(f, CommandResult::failure(r.error));
                      if (r.signedIn)
-                         return signedIn(reply);
+                     {
+                         connected = true;
+                         return signedIn();
+                     }
                      if (r.canceled)
-                         return finish(CommandResult::success(object({ { "canceled", true } })));
-                     finish(CommandResult::failure("sign-in did not return an authorization code"));
+                         return finish(f, CommandResult::success(canceledResult()));
+                     finish(f, CommandResult::failure("sign-in did not return an authorization code"));
                  });
 }
 
-void Tone3000Service::signedIn(std::function<void(CommandResult)> reply)
+void Tone3000Service::connect(Reply reply)
 {
-    inBackground([this] { return client.user(); },
-                 [this, reply](Result<UserRef> r)
+    JUCE_ASSERT_MESSAGE_THREAD
+    auto f = beginFlow(std::move(reply));
+    if (f == nullptr)
+        return;
+    openWindow(f, auth.begin().url,
+               [this, f](const juce::String& query)
+               {
+                   signIn(f, query, [this, f]
+                          {
+                              inBackground([this] { return client.user(); },
+                                           [this, f](Result<UserRef> r)
+                                           {
+                                               if (f->abandoned)
+                                                   return finish(f, CommandResult::success(canceledResult()));
+                                               user = connected ? r.value : std::nullopt; // a failed fetch: no user
+                                               const auto u = user ? online::toVar(*user) : juce::var();
+                                               finish(f, CommandResult::success(
+                                                             object({ { "connected", connected }, { "user", u } })));
+                                           });
+                          });
+               });
+}
+
+void Tone3000Service::browse(const BrowseRequest& request, Reply reply)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    auto f = beginFlow(std::move(reply));
+    if (f == nullptr)
+        return;
+    if (connected)
+        return openPicker(f, request);
+
+    // Sign in first in a window of its own (the plain authorize URL), then open the picker.
+    openWindow(f, auth.begin().url,
+               [this, f, request](const juce::String& query)
+               {
+                   signIn(f, query, [this, f, request]
+                          {
+                              emitStatus();
+                              loadUser();
+                              openPicker(f, request);
+                          });
+               });
+}
+
+void Tone3000Service::openPicker(const FlowPtr& f, const BrowseRequest& request)
+{
+    juce::StringPairArray params;
+    if (request.loadTone.isNotEmpty())
+    {
+        params.set("prompt", "load_tone");
+        params.set("tone_id", request.loadTone);
+    }
+    else
+    {
+        params.set("prompt", "select_tone");
+        params.set("preview", "true");
+        params.set("menubar", "true");
+        params.set("architecture", "2");
+    }
+    if (request.format.isNotEmpty())
+        params.set("format", request.format);
+
+    openWindow(f, auth.begin(params).url,
+               [this, f, request](const juce::String& query) { pickerDone(f, request, query); });
+}
+
+void Tone3000Service::pickerDone(const FlowPtr& f, const BrowseRequest& request, const juce::String& query)
+{
+    if (query.isEmpty())
+        return finish(f, CommandResult::success(canceledResult()));
+
+    // Always through complete(): it checks the state, and exchanges a code the picker may send along.
+    inBackground([this, query] { return auth.complete(query); },
+                 [this, f, request](CallbackResult r)
                  {
-                     const bool connected = auth.isConnected(); // a disconnect may have happened meanwhile
-                     user = connected ? r.value : std::nullopt;   // a failed fetch still leaves us connected
-                     busy = false;
-                     emitStatus();
-                     reply(CommandResult::success(object({ { "connected", connected },
-                                                           { "user", user ? online::toVar(*user) : juce::var() } })));
+                     if (f->abandoned)
+                     {
+                         if (r.signedIn)
+                             signOutQuietly();
+                         return finish(f, CommandResult::success(canceledResult()));
+                     }
+                     if (! r.stateOk)
+                         return stateMismatch(f);
+                     if (r.signedIn)
+                         connected = true;
+                     if (r.canceled || (r.toneId.isEmpty() && r.error.isEmpty()))
+                         return finish(f, CommandResult::success(canceledResult()));
+                     if (r.toneId.isEmpty())
+                         return finish(f, CommandResult::failure(r.error));
+                     auto result = object({ { "toneId", r.toneId } });
+                     if (request.nodeId.isNotEmpty())
+                         result.getDynamicObject()->setProperty("nodeId", request.nodeId);
+                     finish(f, CommandResult::success(result));
                  });
 }
+
+// ---- Lists and tone detail ----
+
+template <typename T>
+void Tone3000Service::replyWith(Result<T> r, Reply reply, std::function<juce::var(const T&)> shape)
+{
+    if (r.error)
+    {
+        if (r.error.kind == ClientError::Kind::NotConnected && connected)
+        {
+            connected = false; // tokens vanished without a sign-out callback
+            user.reset();
+            emitStatus();
+        }
+        return reply(CommandResult::failure(userMessage(r.error)));
+    }
+    reply(CommandResult::success(shape(*r.value)));
+}
+
+void Tone3000Service::list(const juce::String& kind, int page, Reply reply)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (! connected)
+        return reply(CommandResult::failure("not connected"));
+    inBackground([this, kind, page] { return client.list(kind, page); },
+                 [this, reply](Result<Page> r)
+                 {
+                     replyWith<Page>(std::move(r), reply,
+                                     [](const Page& p)
+                                     {
+                                         juce::Array<juce::var> tones;
+                                         for (const auto& t : p.tones)
+                                             tones.add(online::toVar(t));
+                                         return object({ { "tones", tones },
+                                                         { "page", p.page },
+                                                         { "totalPages", p.totalPages } });
+                                     });
+                 });
+}
+
+void Tone3000Service::tone(const juce::String& id, Reply reply)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (! connected)
+        return reply(CommandResult::failure("not connected"));
+    inBackground([this, id] { return client.tone(id); },
+                 [this, reply](Result<Tone> r)
+                 { replyWith<Tone>(std::move(r), reply, [](const Tone& t) { return online::toVar(t); }); });
+}
+
+// ---- Session ----
 
 void Tone3000Service::loadUser()
 {
     inBackground([this] { return client.user(); },
                  [this](Result<UserRef> r)
                  {
-                     if (! r.value || ! auth.isConnected())
+                     if (! r.value || ! connected)
                          return;
                      user = r.value;
                      emitStatus();
                  });
 }
 
-void Tone3000Service::disconnect()
+void Tone3000Service::signOutQuietly()
 {
-    downloads.cancelAll();
     clearing = true;
     auth.clear();
     clearing = false;
+    connected = false;
     user.reset();
+}
+
+void Tone3000Service::disconnect()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (flow != nullptr) // its window may still report: that callback then replies {canceled: true}
+    {
+        flow->abandoned = true;
+        flow = nullptr;
+    }
+    busy = false;
+    downloads.cancelAll();
+    signOutQuietly();
     if (clearCookies)
         clearCookies();
     emitStatus();

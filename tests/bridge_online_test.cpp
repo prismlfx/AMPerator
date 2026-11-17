@@ -4,6 +4,7 @@
 
 #include "Engine.h"
 #include "online/SecureStore.h"
+#include "online/Tone3000Types.h"
 
 #include "support/BridgeFixture.h"
 #include "support/FakeHttp.h"
@@ -18,10 +19,12 @@ namespace
 const juce::String api = "https://www.tone3000.com/api/v1";
 const juce::String clientId = "t3k_pub_test";
 
-juce::String userJson()
+juce::String t3kFixture(const char* name)
 {
-    return juce::File(AMP_FIXTURES_DIR).getChildFile("tone3000").getChildFile("user.json").loadFileAsString();
+    return juce::File(AMP_FIXTURES_DIR).getChildFile("tone3000").getChildFile(name).loadFileAsString();
 }
+
+juce::String userJson() { return t3kFixture("user.json"); }
 
 // The Engine's store: forwards to a store the fixture owns, so tokens survive Engine restarts. Counts accesses.
 class ForwardingStore final : public SecureStore
@@ -51,6 +54,7 @@ struct OnlineFixture : Fixture
     amp::online::MemorySecureStore backing; // outlives Engine restarts
     std::atomic<int> storeAccesses { 0 };
     FakeHttp* http = nullptr; // owned by the Engine; replaced on every start()
+    std::atomic<int> tokenStatus { 200 }; // 400 = the token endpoint answers invalid_grant
     bool refuseWrites = false;
 
     struct Window
@@ -67,8 +71,12 @@ struct OnlineFixture : Fixture
         {
             auto h = std::make_unique<FakeHttp>();
             http = h.get();
-            h->on("POST", api + "/oauth/token", [](const HttpRequest&)
-                  { return FakeHttp::json(200, R"({"access_token":"A1","refresh_token":"R1","expires_in":3600})"); });
+            h->on("POST", api + "/oauth/token", [this](const HttpRequest&)
+                  {
+                      if (tokenStatus.load() != 200)
+                          return FakeHttp::json(tokenStatus.load(), R"({"error":"invalid_grant"})");
+                      return FakeHttp::json(200, R"({"access_token":"A1","refresh_token":"R1","expires_in":3600})");
+                  });
             h->on("GET", api + "/user", [](const HttpRequest&) { return FakeHttp::json(200, userJson()); });
             o.httpTransport = std::move(h);
             if (refuseWrites)
@@ -95,6 +103,29 @@ struct OnlineFixture : Fixture
     ~OnlineFixture() { engine.reset(); } // before `backing` goes
 
     juce::var status() { return ok("tone3000Status"); }
+
+    // GET api + path answers the fixture file (on the current Engine's FakeHttp).
+    void serve(const juce::String& path, const char* file)
+    {
+        http->on("GET", api + path,
+                 [body = t3kFixture(file)](const HttpRequest&) { return FakeHttp::json(200, body); });
+    }
+
+    void serveTone()
+    {
+        serve("/tones/t_456", "tone.json");
+        serve("/models?tone_id=t_456&architecture=2&page_size=300", "models_a2.json");
+        serve("/models?tone_id=t_456&architecture=1&page_size=300", "models_a1.json");
+    }
+
+    // Pumps until the window has been opened `n` times.
+    void waitForWindow(int n)
+    {
+        const auto deadline = juce::Time::getMillisecondCounter() + 5000;
+        while (window.opened < n && juce::Time::getMillisecondCounter() < deadline)
+            pump(10);
+        REQUIRE(window.opened == n);
+    }
 
     // A query parameter of the authorize URL the window was opened with.
     juce::String urlParam(const juce::String& name) const
@@ -286,9 +317,12 @@ TEST_CASE("bridge_online: without a client id every tone3000 command but status 
     CHECK(t["user"].isVoid());
     CHECK(isFalse(f.status()["configured"]));
 
-    for (auto* cmd : { "tone3000Connect", "tone3000Disconnect" })
+    for (const auto& [cmd, args] : { std::pair { "tone3000Connect", obj() }, std::pair { "tone3000Disconnect", obj() },
+                                     std::pair { "tone3000Browse", obj() },
+                                     std::pair { "tone3000List", obj({ { "list", "latest" } }) },
+                                     std::pair { "tone3000Tone", obj({ { "id", "t_1" } }) } })
     {
-        const auto r = f.call(cmd);
+        const auto r = f.call(cmd, args);
         CHECK_FALSE(static_cast<bool>(r["ok"]));
         CHECK(r["error"].toString() == "not configured");
     }
@@ -328,4 +362,287 @@ TEST_CASE("bridge_online: tokens in the store keep TONE3000 connected after a re
     REQUIRE_FALSE(f.events("tone3000Status").empty());
     CHECK(f.lastEvent("tone3000Status")["user"]["username"].toString() == "jane");
     CHECK(f.state()["tone3000"]["user"]["username"].toString() == "jane");
+}
+
+// ---- Browse ----
+
+TEST_CASE("bridge_online: tone3000Browse opens the picker and replies the tone id with the node id")
+{
+    OnlineFixture f;
+    f.connect();
+    const int id = f.post("tone3000Browse", obj({ { "format", "ir" }, { "nodeId", "n3" } }));
+    REQUIRE(f.window.opened == 2);
+    CHECK(f.urlParam("prompt") == "select_tone");
+    CHECK(f.urlParam("preview") == "true");
+    CHECK(f.urlParam("menubar") == "true");
+    CHECK(f.urlParam("architecture") == "2");
+    CHECK(f.urlParam("format") == "ir");
+    CHECK(f.urlParam("client_id") == clientId);
+    CHECK(f.urlParam("state").isNotEmpty());
+    CHECK(static_cast<bool>(f.status()["busy"]));
+    Fixture::pump(50);
+    CHECK(f.replyTo(id).isVoid());
+
+    f.window.done("tone_id=t_1&state=" + f.urlParam("state"));
+    const auto r = f.waitReply(id);
+    INFO(juce::JSON::toString(r, true));
+    REQUIRE(static_cast<bool>(r["ok"]));
+    CHECK(r["result"]["toneId"].toString() == "t_1");
+    CHECK(r["result"]["nodeId"].toString() == "n3");
+    CHECK(isFalse(f.status()["busy"]));
+}
+
+TEST_CASE("bridge_online: tone3000Browse without a format or node sends neither")
+{
+    OnlineFixture f;
+    f.connect();
+    const int id = f.post("tone3000Browse");
+    CHECK_FALSE(f.window.url.contains("format="));
+    f.window.done("tone_id=t_2&state=" + f.urlParam("state"));
+    const auto r = f.waitReply(id);
+    CHECK(r["result"]["toneId"].toString() == "t_2");
+    CHECK_FALSE(r["result"].hasProperty("nodeId"));
+}
+
+TEST_CASE("bridge_online: tone3000Browse canceled, closed or without a tone replies canceled")
+{
+    OnlineFixture f;
+    f.connect();
+    for (auto* query : { "canceled=true&state=", "", "state=" })
+    {
+        const int id = f.post("tone3000Browse");
+        const juce::String q(query);
+        f.window.done(q.isEmpty() ? q : q + f.urlParam("state"));
+        const auto r = f.waitReply(id);
+        INFO(query << " -> " << juce::JSON::toString(r, true));
+        REQUIRE(static_cast<bool>(r["ok"]));
+        CHECK(static_cast<bool>(r["result"]["canceled"]));
+        CHECK(isFalse(f.status()["busy"]));
+    }
+}
+
+TEST_CASE("bridge_online: tone3000Browse with loadTone opens load_tone")
+{
+    OnlineFixture f;
+    f.connect();
+    const int id = f.post("tone3000Browse", obj({ { "format", "nam" }, { "loadTone", "t_9" } }));
+    CHECK(f.urlParam("prompt") == "load_tone");
+    CHECK(f.urlParam("tone_id") == "t_9");
+    CHECK(f.urlParam("format") == "nam");
+    CHECK_FALSE(f.window.url.contains("preview="));
+    CHECK_FALSE(f.window.url.contains("architecture="));
+    f.window.done("tone_id=t_10&state=" + f.urlParam("state"));
+    CHECK(f.waitReply(id)["result"]["toneId"].toString() == "t_10");
+}
+
+TEST_CASE("bridge_online: tone3000Browse while disconnected signs in first, then opens the picker")
+{
+    OnlineFixture f;
+    const int id = f.post("tone3000Browse", obj({ { "format", "nam" } }));
+    REQUIRE(f.window.opened == 1);
+    CHECK_FALSE(f.window.url.contains("prompt"));
+    f.window.done("code=c&state=" + f.urlParam("state"));
+
+    f.waitForWindow(2);
+    CHECK(f.urlParam("prompt") == "select_tone");
+    CHECK(f.urlParam("format") == "nam");
+    CHECK(f.replyTo(id).isVoid());
+    CHECK(static_cast<bool>(f.status()["connected"]));
+
+    f.window.done("tone_id=t_3&state=" + f.urlParam("state"));
+    const auto r = f.waitReply(id);
+    REQUIRE(static_cast<bool>(r["ok"]));
+    CHECK(r["result"]["toneId"].toString() == "t_3");
+    CHECK(f.backing.get(clientId).has_value());
+}
+
+TEST_CASE("bridge_online: tone3000Browse while disconnected and the sign-in is closed replies canceled")
+{
+    OnlineFixture f;
+    const int id = f.post("tone3000Browse");
+    f.window.done("");
+    CHECK(static_cast<bool>(f.waitReply(id)["result"]["canceled"]));
+    CHECK(f.window.opened == 1);
+    CHECK(isFalse(f.status()["busy"]));
+}
+
+TEST_CASE("bridge_online: a picker callback with the wrong state is refused")
+{
+    OnlineFixture f;
+    f.connect();
+    const int id = f.post("tone3000Browse");
+    f.window.done("tone_id=t_1&state=wrong");
+    const auto r = f.waitReply(id);
+    CHECK_FALSE(static_cast<bool>(r["ok"]));
+    CHECK(r["error"].toString() == "sign-in response didn't match the request");
+}
+
+TEST_CASE("bridge_online: tone3000Browse validates its arguments and shares busy with connect")
+{
+    OnlineFixture f;
+    f.connect();
+    auto r = f.call("tone3000Browse", obj({ { "format", "wav" } }));
+    CHECK_FALSE(static_cast<bool>(r["ok"]));
+    CHECK(r["error"].toString().contains("format"));
+
+    const int first = f.startConnect();
+    r = f.call("tone3000Browse");
+    CHECK(r["error"].toString() == "busy");
+    f.window.done("");
+    f.waitReply(first);
+
+    f.engine->onOpenAuthWindow = nullptr;
+    CHECK(f.callLater("tone3000Browse")["error"].toString() == "not available");
+}
+
+// ---- Lists and tone detail ----
+
+TEST_CASE("bridge_online: tone3000List replies the page of tones")
+{
+    OnlineFixture f;
+    f.connect();
+    f.serve("/tones/favorited", "list_favorited.json");
+    const auto r = f.callLater("tone3000List", obj({ { "list", "favorited" }, { "page", 1 } }));
+    INFO(juce::JSON::toString(r, true));
+    REQUIRE(static_cast<bool>(r["ok"]));
+    auto* tones = r["result"]["tones"].getArray();
+    REQUIRE(tones != nullptr);
+    REQUIRE(tones->size() == 2);
+    CHECK((*tones)[0]["title"].toString() == "Fake Crunch Rig");
+    CHECK((*tones)[0]["creator"]["username"].toString() == "jane");
+    CHECK((*tones)[1]["creator"]["username"].toString() == "bob");
+    CHECK(static_cast<int>(r["result"]["page"]) == 2); // as the fixture says
+    CHECK(static_cast<int>(r["result"]["totalPages"]) == 2);
+    CHECK(f.http->snapshot().back().url == api + "/tones/favorited?page=1&page_size=25");
+}
+
+TEST_CASE("bridge_online: tone3000List validates its arguments")
+{
+    OnlineFixture f;
+    f.connect();
+    for (const auto& args : { obj({ { "list", "search" } }), obj(), obj({ { "list", "latest" }, { "page", 0 } }),
+                              obj({ { "list", "latest" }, { "page", 1.5 } }) })
+    {
+        const auto r = f.call("tone3000List", args);
+        INFO(juce::JSON::toString(args, true));
+        CHECK_FALSE(static_cast<bool>(r["ok"]));
+    }
+    CHECK(f.http->requestCount() == 2); // only the sign-in's token and user requests
+}
+
+TEST_CASE("bridge_online: tone3000List and tone3000Tone need a connection")
+{
+    OnlineFixture f;
+    for (const auto& [cmd, args] : { std::pair { "tone3000List", obj({ { "list", "trending" } }) },
+                                     std::pair { "tone3000Tone", obj({ { "id", "t_456" } }) } })
+    {
+        const auto r = f.call(cmd, args); // replied at once
+        CHECK_FALSE(static_cast<bool>(r["ok"]));
+        CHECK(r["error"].toString() == "not connected");
+    }
+    CHECK(f.http->requestCount() == 0);
+}
+
+TEST_CASE("bridge_online: tone3000Tone replies the tone with A2 models first")
+{
+    OnlineFixture f;
+    f.connect();
+    f.serveTone();
+    const auto r = f.callLater("tone3000Tone", obj({ { "id", "t_456" } }));
+    INFO(juce::JSON::toString(r, true));
+    REQUIRE(static_cast<bool>(r["ok"]));
+    CHECK(r["result"]["title"].toString() == "Fake Crunch Rig");
+    auto* models = r["result"]["models"].getArray();
+    REQUIRE(models != nullptr);
+    REQUIRE(models->size() == 3);
+    CHECK((*models)[0]["id"].toString() == "m_201");
+    CHECK((*models)[0]["architecture"].toString() == "2");
+    CHECK((*models)[1]["id"].toString() == "m_123");
+
+    CHECK_FALSE(static_cast<bool>(f.call("tone3000Tone", obj({ { "id", "" } }))["ok"]));
+}
+
+TEST_CASE("bridge_online: a rate-limited call says when to try again")
+{
+    OnlineFixture f;
+    f.connect();
+    juce::StringPairArray headers;
+    headers.set("Retry-After", "7");
+    f.http->on("GET", api + "/tones/latest",
+               [headers](const HttpRequest&) { return FakeHttp::json(429, "{}", headers); });
+    const auto r = f.callLater("tone3000List", obj({ { "list", "latest" } }));
+    CHECK_FALSE(static_cast<bool>(r["ok"]));
+    CHECK(r["error"].toString() == "TONE3000 rate limit; try again in 7 s");
+}
+
+TEST_CASE("bridge_online: client errors become readable messages")
+{
+    using amp::online::ClientError;
+    auto error = [](ClientError::Kind kind, const juce::String& message, int retry = 0)
+    {
+        ClientError e;
+        e.kind = kind;
+        e.message = message;
+        e.retryAfterSec = retry;
+        return amp::online::userMessage(e);
+    };
+    CHECK(error(ClientError::Kind::RateLimited, "rate limited", 7) == "TONE3000 rate limit; try again in 7 s");
+    CHECK(error(ClientError::Kind::RateLimited, "rate limited") == "TONE3000 rate limit; try again later");
+    CHECK(error(ClientError::Kind::NotConnected, "x") == "not connected");
+    CHECK(error(ClientError::Kind::NotFound, "not found") == "not found on TONE3000");
+    CHECK(error(ClientError::Kind::Network, "timed out") == "Can't reach TONE3000: timed out");
+    CHECK(error(ClientError::Kind::Http, "HTTP 500") == "HTTP 500");
+}
+
+TEST_CASE("bridge_online: a refused token refresh signs out and the call replies not connected")
+{
+    OnlineFixture f;
+    f.connect();
+    f.serve("/tones/trending", "list_trending.json");
+    // Tokens about to expire, and the token endpoint refuses the refresh.
+    REQUIRE(f.backing.set(clientId, R"({"access":"A1","refresh":"R1","expiresAtMs":1})"));
+    f.tokenStatus = 400;
+
+    const auto r = f.callLater("tone3000List", obj({ { "list", "trending" } }));
+    CHECK_FALSE(static_cast<bool>(r["ok"]));
+    CHECK(r["error"].toString() == "not connected");
+    f.pump(50);
+    const auto ev = f.lastEvent("tone3000Status");
+    CHECK(isFalse(ev["connected"]));
+    CHECK(ev["user"].isVoid());
+    CHECK(isFalse(f.state()["tone3000"]["connected"]));
+    CHECK_FALSE(f.backing.get(clientId).has_value());
+}
+
+// ---- Window flow edge cases ----
+
+TEST_CASE("bridge_online: a window hook that throws is not available and clears busy")
+{
+    OnlineFixture f;
+    f.engine->onOpenAuthWindow = [](const juce::String&, const juce::String&, std::function<void(const juce::String&)>)
+    { throw std::runtime_error("no window"); };
+    const auto r = f.callLater("tone3000Connect");
+    CHECK_FALSE(static_cast<bool>(r["ok"]));
+    CHECK(r["error"].toString() == "not available");
+    CHECK(isFalse(f.status()["busy"]));
+    CHECK(isFalse(f.lastEvent("tone3000Status")["busy"]));
+}
+
+TEST_CASE("bridge_online: disconnect abandons a pending sign-in")
+{
+    OnlineFixture f;
+    const int id = f.startConnect();
+    const auto staleDone = f.window.done;
+    const auto staleState = f.urlParam("state");
+    f.ok("tone3000Disconnect");
+    CHECK(isFalse(f.status()["busy"]));
+
+    staleDone("code=c&state=" + staleState); // the old window reports late
+    const auto r = f.waitReply(id);
+    REQUIRE(static_cast<bool>(r["ok"]));
+    CHECK(static_cast<bool>(r["result"]["canceled"]));
+    f.pump(50);
+    CHECK(isFalse(f.status()["connected"]));
+    CHECK(f.http->requestCount() == 0); // the code was never exchanged
+    f.connect();                        // a new flow works
 }

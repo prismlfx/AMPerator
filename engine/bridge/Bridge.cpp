@@ -255,6 +255,26 @@ const std::map<juce::String, Handler>& commands()
         { "tone3000Status", [](Engine& e, const juce::var&) { return e.tone3000Status(); } },
         { "tone3000Connect", [](Engine& e, const juce::var&) { return e.tone3000Connect(); } },
         { "tone3000Disconnect", [](Engine& e, const juce::var&) { return e.tone3000Disconnect(); } },
+        { "tone3000Browse", [](Engine& e, const juce::var& a)
+          {
+              const auto format = optStr(a, "format").value_or("");
+              if (format.isNotEmpty() && format != "nam" && format != "ir")
+                  throw ArgError("argument \"format\" must be \"nam\" or \"ir\"");
+              return e.tone3000Browse(format, optStr(a, "nodeId").value_or(""), optStr(a, "loadTone").value_or(""));
+          } },
+        { "tone3000List", [](Engine& e, const juce::var& a)
+          {
+              static const juce::StringArray lists { "favorited", "downloaded", "created", "trending", "latest" };
+              const auto list = str(a, "list");
+              if (! lists.contains(list))
+                  throw ArgError("unknown list: " + list
+                                 + " (expected favorited, downloaded, created, trending or latest)");
+              const int page = a.hasProperty("page") ? integer(a, "page") : 1;
+              if (page < 1)
+                  throw ArgError("argument \"page\" must be 1 or more");
+              return e.tone3000List(list, page);
+          } },
+        { "tone3000Tone", [](Engine& e, const juce::var& a) { return e.tone3000Tone(nonEmpty(a, "id")); } },
     };
     return table;
 }
@@ -309,6 +329,8 @@ void Bridge::handle(const juce::var& message)
             b.current = std::move(outer);
         }
     } restore { *this, outer };
+    // True once a completion the handler took has replied (handle() must not reply a second time).
+    auto alreadyReplied = [this] { return current->replied != nullptr && *current->replied; };
 
     try
     {
@@ -343,17 +365,19 @@ void Bridge::handle(const juce::var& message)
             current->replied = nullptr; // the completion replies; keep it live past this handle()
             return;
         }
-        if (current->replied != nullptr && *current->replied)
+        if (alreadyReplied())
             return; // the handler already replied through a completion
         replyWith(id, r);
     }
     catch (const ArgError& e)
     {
-        reply(id, false, juce::String(e.what()));
+        if (! alreadyReplied())
+            reply(id, false, juce::String(e.what()));
     }
     catch (const std::exception& e)
     {
-        reply(id, false, "internal error: " + juce::String(e.what()));
+        if (! alreadyReplied())
+            reply(id, false, "internal error: " + juce::String(e.what()));
     }
 }
 

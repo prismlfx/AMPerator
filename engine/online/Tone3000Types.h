@@ -67,6 +67,9 @@ struct Result
     ClientError error;
 };
 
+// The text a bridge reply or job shows for a client error (tone-library spec section 11).
+juce::String userMessage(const ClientError&);
+
 // Bridge shapes (camelCase). toVar(Tone) contains everything toVar(ToneSummary) does.
 juce::var toVar(const UserRef&);
 juce::var toVar(const ToneSummary&);

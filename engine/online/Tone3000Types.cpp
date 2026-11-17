@@ -165,4 +165,22 @@ ModelInfo parseModel(const juce::var& v)
     m.modelUrl = field(v, "model_url");
     return m;
 }
+juce::String userMessage(const ClientError& e)
+{
+    switch (e.kind)
+    {
+        case ClientError::Kind::RateLimited:
+            return e.retryAfterSec > 0 ? "TONE3000 rate limit; try again in " + juce::String(e.retryAfterSec) + " s"
+                                       : juce::String("TONE3000 rate limit; try again later");
+        case ClientError::Kind::NotConnected: return "not connected";
+        case ClientError::Kind::NotFound: return "not found on TONE3000";
+        case ClientError::Kind::Network: return "Can't reach TONE3000: " + e.message;
+        case ClientError::Kind::None:
+        case ClientError::Kind::NotConfigured:
+        case ClientError::Kind::Forbidden:
+        case ClientError::Kind::Http:
+        case ClientError::Kind::Parse: break;
+    }
+    return e.message;
+}
 } // namespace amp::online

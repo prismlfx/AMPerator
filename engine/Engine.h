@@ -123,8 +123,9 @@ public:
         edit or a device-rate rebuild of the current rig (sameRig = true) -- and from ~Engine. Every plugin instance
         handed to onOpenPluginEditor is destroyed after this returns, so the app must close their editors here. */
     std::function<void(bool sameRig)> beforeNodesReplaced;
-    /** The app opens the TONE3000 sign-in window at `url` and calls done(query) with the query of the first request
-        starting with `redirectPrefix`, or done("") when the user closes the window. Null = "not available". */
+    /** The app opens the TONE3000 sign-in / picker window at `url` and calls done(query) with the query of the first
+        request starting with `redirectPrefix`, or done("") when the user closes the window. done must be called exactly
+        once, on the message thread (later calls are ignored). Null, or a hook that throws, = "not available". */
     std::function<void(const juce::String& url, const juce::String& redirectPrefix,
                        std::function<void(const juce::String& query)> done)>
         onOpenAuthWindow;
@@ -216,6 +217,14 @@ public:
     /** Deferred: replies when the sign-in window is done, {connected, user} or {canceled: true}. */
     CommandResult tone3000Connect();
     CommandResult tone3000Disconnect(); // {}
+    /** Deferred: TONE3000's picker (format "nam" | "ir" | "" = any; loadTone non-empty = prompt=load_tone for that
+        tone); signs in first when not connected. {toneId, nodeId?} (nodeId echoed when given) or {canceled: true}. */
+    CommandResult tone3000Browse(const juce::String& format, const juce::String& nodeId, const juce::String& loadTone);
+    /** Deferred: {tones: [ToneSummary], page, totalPages};
+        kind = favorited | downloaded | created | trending | latest. */
+    CommandResult tone3000List(const juce::String& kind, int page);
+    /** Deferred: Tone (models A2 first, then A1). */
+    CommandResult tone3000Tone(const juce::String& id);
 
 private:
     struct TunerPreparer;
